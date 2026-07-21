@@ -1,0 +1,349 @@
+// Patched (de-minified) bundle: streams the 1.12GB per-layer embedding into two row-tiled
+// GPU buffers so iOS Safari's ~1GB JS-heap and GPU-buffer limits are never exceeded.
+import { Gemma4Mobile } from "./gemma-4-e2b.pretty.js";
+
+// Streamed markdown → HTML via `marked`, loaded lazily. Falls back to a tiny inline renderer until
+// (or if) it loads, so chat never hard-depends on the CDN.
+let marked = null;
+import("https://esm.sh/marked@17")
+  .then((m) => { marked = m.marked; marked.use({ gfm: true, breaks: true }); })
+  .catch((e) => { console.warn("[app] marked CDN failed, using fallback renderer:", e?.message ?? e); });
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  newBtn: $("newBtn"), loadBtn: $("loadBtn"),
+  statusbar: $("statusbar"), status: $("status"), statusText: $("statusText"),
+  bar: $("bar"), scroll: $("scroll"), thread: $("thread"),
+  input: $("input"), sendBtn: $("sendBtn"), stopBtn: $("stopBtn"), liveStat: $("liveStat"),
+};
+const barFill = els.bar.firstElementChild;
+
+let model = null;
+let messages = [];
+let abortController = null;
+let isGenerating = false;
+let isLoading = false;
+
+// ---- progress bar easing (coalesce bursty byte events into one write/frame, never dip) ----
+let targetProgress = 0, shownProgress = 0, progressRaf = 0;
+function setProgressFraction(value) {
+  if (!finite(value)) return;
+  targetProgress = Math.max(clamp(value, 0, 1), targetProgress);
+  // rAF doesn't fire in hidden/backgrounded tabs — write directly there so the bar
+  // is accurate the moment the tab becomes visible again.
+  if (document.hidden) { shownProgress = targetProgress; barFill.style.width = `${(shownProgress * 100).toFixed(2)}%`; return; }
+  if (!progressRaf) progressRaf = requestAnimationFrame(stepBar);
+}
+function stepBar() {
+  const gap = targetProgress - shownProgress;
+  shownProgress += gap < 0.0015 ? gap : gap * 0.3;
+  barFill.style.width = `${(shownProgress * 100).toFixed(2)}%`;
+  progressRaf = shownProgress < targetProgress ? requestAnimationFrame(stepBar) : 0;
+}
+function setProgressImmediate(v) {
+  if (progressRaf) { cancelAnimationFrame(progressRaf); progressRaf = 0; }
+  targetProgress = shownProgress = clamp(v, 0, 1);
+  barFill.style.width = `${(shownProgress * 100).toFixed(2)}%`;
+}
+
+function setStatus(state, text) {
+  els.statusbar.classList.add("show");
+  els.status.className = "status" + (state ? " " + state : "");
+  if (text !== undefined) els.statusText.innerHTML = text;
+}
+
+// ---- boot ----
+if (!navigator.gpu) {
+  els.loadBtn.disabled = true;
+  setStatus("error", "WebGPU unavailable here. On iOS this usually means the page isn’t a <strong>secure context</strong> — it must be served over HTTPS (or localhost).");
+  console.error("[app] navigator.gpu is undefined — no WebGPU. secureContext:", window.isSecureContext, "proto:", location.protocol);
+} else {
+  console.log("[app] navigator.gpu present. secureContext:", window.isSecureContext);
+}
+
+els.loadBtn.addEventListener("click", loadModel);
+els.newBtn.addEventListener("click", newSession);
+els.sendBtn.addEventListener("click", send);
+els.stopBtn.addEventListener("click", () => abortController?.abort());
+els.input.addEventListener("input", () => { autoGrow(); refreshSend(); });
+els.input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!els.sendBtn.disabled) send(); }
+});
+els.thread.addEventListener("click", (e) => {
+  const seed = e.target.closest(".seed");
+  if (!seed || seed.disabled || !model || isGenerating) return;
+  els.input.value = seed.textContent; send();
+});
+
+renderWelcome();
+
+// DEBUG: auto-start the load as soon as the page opens, so on-device testing needs no tap
+// (you can't both tap in Safari and read the desktop). Remove once iOS load is working.
+if (navigator.gpu) {
+  console.log("[app] auto-loading model (debug)…");
+  setTimeout(loadModel, 400);
+}
+
+async function loadModel() {
+  if (model || isLoading) return;
+  isLoading = true;
+  els.loadBtn.disabled = true;
+  els.loadBtn.textContent = "Loading…";
+  els.bar.classList.remove("done");
+  setProgressImmediate(0.02);
+  setStatus("loading", "Requesting WebGPU device…");
+
+  const started = performance.now();
+  try {
+    console.log("[app] Gemma4Mobile.load() starting…");
+    // iOS Safari jettisons the tab under transient JS-heap pressure; keep fewer, smaller
+    // chunks in flight there (2×64MB) than the desktop default (4×128MB).
+    const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    model = await Gemma4Mobile.load(null, {
+      onProgress: onLoadProgress,
+      ...(isIOS ? { concurrency: 2, chunkMaxBytes: 64 * 1024 * 1024 } : {}),
+    });
+    window.__model = model; // debug handle for the remote-eval channel
+    console.log("[app] weights loaded, warming up kernels…");
+    setStatus("loading", "Warming up kernels…");
+    await model.warmup();
+
+    const seconds = ((performance.now() - started) / 1000).toFixed(1);
+    console.log(`[app] model ready in ${seconds}s`);
+    setStatus("ready", `Ready in <strong>${seconds}s</strong> · on-device`);
+    setProgressImmediate(1);
+    els.bar.classList.add("done");
+    els.loadBtn.classList.add("hidden");
+    enableChat();
+    // Collapse the status bar shortly after ready so the thread gets the space.
+    setTimeout(() => { if (!isGenerating && model) els.statusbar.classList.remove("show"); }, 2500);
+  } catch (error) {
+    console.error("[app] load failed:", error?.stack || error?.message || error);
+    setStatus("error", `Failed to load: ${escapeHtml(String(error?.message ?? error))}`);
+    els.bar.classList.add("done");
+    els.loadBtn.disabled = false;
+    els.loadBtn.textContent = "Retry load";
+    isLoading = false;
+  }
+}
+
+function onLoadProgress(event) {
+  if (event.status !== "weights") {
+    setStatus("loading", labelFor(event.status));
+    setPhaseProgress(event.status, event.fraction);
+    return;
+  }
+  const kind = event.kind ?? (finite(event.total) && event.total > 1_000_000 ? "bytes" : "tensors");
+  const fraction = finite(event.fraction) ? clamp(event.fraction, 0, 1) : null;
+  if (kind !== "tensors") setPhaseProgress("weights", fraction); // drive bar off byte download only
+  setStatus("loading", formatWeightProgress(event, kind, fraction));
+}
+function labelFor(status) {
+  return { init: "Requesting WebGPU device…", tokenizer: "Loading tokenizer…", weights: "Downloading weights…", ready: "Ready." }[status] ?? status;
+}
+function setPhaseProgress(status, frac) {
+  const [lo, hi] = status === "weights" ? [0.04, 1.0]
+    : ({ init: [0, 0.02], tokenizer: [0.02, 0.04], ready: [1, 1] }[status] ?? [0, 1]);
+  const f = finite(frac) ? clamp(frac, 0, 1) : 0;
+  setProgressFraction(lo + (hi - lo) * f);
+}
+function formatWeightProgress(event, kind, fraction) {
+  const pct = fraction === null ? "" : ` (${Math.round(fraction * 100)}%)`;
+  const loaded = finite(event.loaded) ? event.loaded : null;
+  const total = finite(event.total) ? event.total : null;
+  if (kind === "bytes") {
+    const verb = event.fromCache ? "Loading cached weights" : "Downloading weights";
+    if (loaded !== null && total !== null) return `${verb}: ${fmtBytes(loaded)} / ${fmtBytes(total)}${pct}`;
+    if (total !== null) return `${verb}: ${fmtBytes(total)} total`;
+    return `${escapeHtml(event.message || verb)}…`;
+  }
+  if (loaded !== null && total !== null) return `Preparing GPU weights: ${fmtInt(loaded)} / ${fmtInt(total)} tensors${pct}`;
+  return event.message ? `Preparing GPU weights: ${escapeHtml(event.message)}` : "Preparing GPU weights…";
+}
+
+function enableChat() {
+  isLoading = false;
+  els.input.disabled = false;
+  els.input.placeholder = "Ask anything…";
+  els.newBtn.disabled = false;
+  setSeedsEnabled(true);
+  refreshSend();
+  els.input.focus();
+}
+
+async function send() {
+  const text = els.input.value.trim();
+  if (!text || !model || isGenerating) return;
+
+  removeWelcome();
+  els.input.value = ""; autoGrow(); refreshSend();
+  appendUser(text);
+  messages.push({ role: "user", content: text });
+
+  const { msg, bubble } = appendAssistant();
+  bubble.innerHTML = '<span class="thinking"><span></span><span></span><span></span></span>';
+  scrollDown();
+
+  setGenerating(true);
+  abortController = new AbortController();
+
+  let reply = "", startedAt = 0, firstTokenAt = 0, endedAt = 0, tokens = 0;
+  try {
+    const stream = model.generate(messages, { maxNewTokens: 4096, signal: abortController.signal });
+    startedAt = performance.now();
+    for await (const { text: full } of stream) {
+      const now = performance.now();
+      if (!firstTokenAt) firstTokenAt = now;
+      tokens++; reply = full;
+      scheduleRender(bubble, reply);
+      updateLiveStat(startedAt, firstTokenAt, now, tokens);
+    }
+  } catch (error) {
+    console.error("[app] generate error:", error?.stack || error?.message || error);
+    if (!reply) reply = `_Stopped: ${escapeHtml(String(error?.message ?? error))}_`;
+  } finally {
+    endedAt = performance.now();
+    pendingRender = null;
+    renderAssistant(bubble, reply, false);
+    appendMeta(msg, { startedAt, firstTokenAt, endedAt, tokens });
+    scrollDown();
+    messages.push({ role: "assistant", content: reply });
+    setGenerating(false);
+    els.liveStat.textContent = "";
+    abortController = null;
+    els.input.focus();
+  }
+}
+
+function setGenerating(on) {
+  isGenerating = on;
+  els.input.disabled = on;
+  els.newBtn.disabled = on;
+  els.sendBtn.classList.toggle("hidden", on);
+  els.stopBtn.classList.toggle("hidden", !on);
+  if (on) setStatus("busy", "Generating…");
+  else if (model) setStatus("ready", "Ready · on-device");
+  refreshSend();
+}
+
+function updateLiveStat(startedAt, firstTokenAt, now, tokens) {
+  if (tokens <= 1) { els.liveStat.textContent = `TTFT ${(firstTokenAt - startedAt).toFixed(0)} ms`; return; }
+  const tps = (tokens - 1) / Math.max((now - firstTokenAt) / 1000, 1e-9);
+  els.liveStat.textContent = `${tps.toFixed(1)} tok/s`;
+}
+
+function newSession() {
+  if (isGenerating) return;
+  messages = [];
+  model?.reset();
+  renderWelcome();
+  setSeedsEnabled(Boolean(model));
+  els.input.focus();
+}
+
+// ---- DOM builders ----
+function appendUser(text) {
+  const msg = document.createElement("div");
+  msg.className = "msg user";
+  msg.appendChild(role("You"));
+  const bubble = document.createElement("div");
+  bubble.className = "bubble user"; bubble.textContent = text;
+  msg.appendChild(bubble); els.thread.appendChild(msg); scrollDown();
+}
+function appendAssistant() {
+  const msg = document.createElement("div");
+  msg.className = "msg assistant";
+  msg.appendChild(role("Gemma"));
+  const bubble = document.createElement("div");
+  bubble.className = "bubble assistant";
+  msg.appendChild(bubble); els.thread.appendChild(msg);
+  return { msg, bubble };
+}
+function role(text) { const d = document.createElement("div"); d.className = "role"; d.textContent = text; return d; }
+function appendMeta(msg, { startedAt, firstTokenAt, endedAt, tokens }) {
+  if (tokens <= 0) return;
+  const decodeTokens = Math.max(tokens - 1, 0);
+  const decodeSec = Math.max((endedAt - firstTokenAt) / 1000, 1e-9);
+  const tps = decodeTokens > 0 ? decodeTokens / decodeSec : 0;
+  const ttft = firstTokenAt - startedAt;
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const parts = [`${tokens} tok`, `TTFT ${ttft.toFixed(0)} ms`];
+  if (tps > 0) parts.push(`${tps.toFixed(1)} tok/s`);
+  meta.textContent = parts.join("  ·  ");
+  msg.appendChild(meta);
+}
+
+// ---- streamed render (coalesced to 1/frame) ----
+let renderScheduled = false, pendingRender = null;
+function scheduleRender(bubble, raw) {
+  pendingRender = { bubble, raw };
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    if (!pendingRender) return;
+    renderAssistant(pendingRender.bubble, pendingRender.raw, true);
+    scrollDown();
+  });
+}
+function renderAssistant(bubble, raw, caret) {
+  if (marked) {
+    try { bubble.innerHTML = sanitize(marked.parse(raw || "")); if (caret) addCaret(bubble); return; }
+    catch { /* fall through */ }
+  }
+  const safe = escapeHtml(raw || "");
+  const paras = safe.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  bubble.innerHTML = paras.map((p) => `<p>${p.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+?)`/g, "<code>$1</code>").replace(/\n/g, "<br>")}</p>`).join("");
+  if (caret) addCaret(bubble);
+}
+function addCaret(bubble) {
+  const c = document.createElement("span"); c.className = "caret";
+  (bubble.querySelector("p:last-of-type") || bubble).appendChild(c);
+}
+function sanitize(html) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  tpl.content.querySelectorAll("script,style,iframe,object,embed,link,meta,form").forEach((el) => el.remove());
+  tpl.content.querySelectorAll("*").forEach((el) => {
+    for (const attr of [...el.attributes]) {
+      const n = attr.name.toLowerCase();
+      if (n.startsWith("on") || ((n === "href" || n === "src") && /^\s*(javascript|data):/i.test(attr.value))) el.removeAttribute(attr.name);
+    }
+  });
+  return tpl.innerHTML;
+}
+
+// ---- welcome ----
+function renderWelcome() {
+  els.thread.replaceChildren();
+  const w = document.createElement("div");
+  w.className = "welcome"; w.id = "welcome";
+  w.innerHTML = `
+    <h2>What's on your mind?</h2>
+    <p>${model ? "Runs entirely on your device." : "Load the model to begin — it runs entirely on your device."}</p>
+    <div class="seeds">
+      <button class="seed" type="button">Write a haiku about on-device AI</button>
+      <button class="seed" type="button">Explain WebGPU in two sentences</button>
+      <button class="seed" type="button">Give me a quick pasta recipe</button>
+    </div>`;
+  els.thread.appendChild(w);
+  setSeedsEnabled(Boolean(model));
+}
+function removeWelcome() { $("welcome")?.remove(); }
+function setSeedsEnabled(on) { document.querySelectorAll(".seed").forEach((s) => { s.disabled = !on; }); }
+
+// ---- utils ----
+function refreshSend() { els.sendBtn.disabled = isGenerating || !model || els.input.value.trim() === ""; }
+function autoGrow() { els.input.style.height = "auto"; els.input.style.height = `${Math.min(els.input.scrollHeight, 160)}px`; }
+function scrollDown() { els.scroll.scrollTop = els.scroll.scrollHeight; }
+function finite(v) { return typeof v === "number" && Number.isFinite(v); }
+function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
+function fmtInt(v) { return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(v); }
+function fmtBytes(bytes) {
+  const u = ["B", "KB", "MB", "GB"]; let v = bytes, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  const d = i === 3 ? 2 : (v >= 10 || i === 0 ? 0 : 1);
+  return `${v.toFixed(d)} ${u[i]}`;
+}
+function escapeHtml(v) { return String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }

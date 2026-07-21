@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta name="color-scheme" content="dark" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Gemma 4 · WebGPU Chat</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡️</text></svg>">
+<!-- Debug client loads first so it can capture the very earliest errors, including from the module below. -->
+<script src="./debug-client.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0c;
+    --bg2: #101014;
+    --t1: rgba(255,255,255,0.94);
+    --t2: rgba(255,255,255,0.58);
+    --t3: rgba(255,255,255,0.34);
+    --line: rgba(255,255,255,0.09);
+    --panel: rgba(255,255,255,0.035);
+    --panel2: rgba(255,255,255,0.06);
+    --accent: #7c9dff;
+    --ok: #64ffa0;
+    --warn: #ffcd6b;
+    --danger: #ff7a6b;
+    --user: rgba(124,157,255,0.14);
+    --body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--t1); font-family: var(--body);
+    font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased;
+    height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  button, textarea, input { font: inherit; color: inherit; }
+  button { appearance: none; background: none; border: 0; cursor: pointer; }
+  code, pre { font-family: var(--mono); }
+
+  /* ---------- Header ---------- */
+  header {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+    padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+    padding-top: calc(10px + env(safe-area-inset-top));
+    border-bottom: 1px solid var(--line); background: var(--bg2);
+  }
+  .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .brand .dot { font-size: 18px; line-height: 1; }
+  .brand .name { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; white-space: nowrap; }
+  .brand .sub { font-size: 12px; color: var(--t3); white-space: nowrap; }
+  @media (max-width: 480px) { .brand .sub { display: none; } }
+  header .spacer { flex: 1; }
+  .hbtn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
+    border: 1px solid var(--line); border-radius: 9px; background: var(--panel);
+    font-size: 13px; font-weight: 500; color: var(--t2); transition: background .15s, color .15s;
+  }
+  .hbtn:hover:not(:disabled) { background: var(--panel2); color: var(--t1); }
+  .hbtn:disabled { opacity: 0.4; cursor: default; }
+  .hbtn.primary { color: #0a0a0c; background: var(--accent); border-color: transparent; }
+  .hbtn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+
+  /* ---------- Status / progress bar ---------- */
+  #statusbar {
+    flex: 0 0 auto; padding: 0 14px; background: var(--bg2);
+    border-bottom: 1px solid var(--line); overflow: hidden;
+    max-height: 0; transition: max-height .28s ease, padding .28s ease;
+  }
+  #statusbar.show { max-height: 72px; padding: 10px 14px 12px; }
+  .status-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--t2); }
+  .status-row .st-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--t3); flex: 0 0 auto; }
+  .status.loading .st-dot { background: var(--warn); animation: pulse 1.2s infinite; }
+  .status.ready   .st-dot { background: var(--ok); }
+  .status.error   .st-dot { background: var(--danger); }
+  .status.busy    .st-dot { background: var(--accent); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  #statusText { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #statusText strong { color: var(--t1); font-weight: 600; }
+  .bar { margin-top: 8px; height: 4px; border-radius: 4px; background: var(--panel2); overflow: hidden; }
+  .bar > div { height: 100%; width: 0; border-radius: 4px; background: linear-gradient(90deg, var(--accent), #a9c0ff); transition: none; }
+  .bar.done > div { background: var(--ok); }
+
+  /* ---------- Thread ---------- */
+  #scroll { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }
+  #thread { max-width: 780px; margin: 0 auto; padding: 22px 16px 8px; display: flex; flex-direction: column; gap: 20px; }
+  .msg { display: flex; flex-direction: column; gap: 5px; }
+  .msg .role { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--t3); font-weight: 600; }
+  .bubble { font-size: 15.5px; line-height: 1.6; word-wrap: break-word; overflow-wrap: anywhere; }
+  .bubble.user {
+    align-self: flex-start; background: var(--user); border: 1px solid rgba(124,157,255,0.18);
+    padding: 10px 14px; border-radius: 4px 14px 14px 14px; max-width: 90%; white-space: pre-wrap;
+  }
+  .msg.user { align-items: flex-start; }
+  .bubble.assistant > *:first-child { margin-top: 0; }
+  .bubble.assistant p { margin: 0 0 10px; }
+  .bubble.assistant p:last-child { margin-bottom: 0; }
+  .bubble.assistant pre { background: #000; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 10px 0; font-size: 13px; }
+  .bubble.assistant code { background: var(--panel2); padding: 1px 5px; border-radius: 5px; font-size: 0.9em; }
+  .bubble.assistant pre code { background: none; padding: 0; }
+  .bubble.assistant ul, .bubble.assistant ol { margin: 8px 0 8px 22px; }
+  .bubble.assistant h1,.bubble.assistant h2,.bubble.assistant h3 { margin: 14px 0 8px; line-height: 1.3; }
+  .caret { display: inline-block; width: 7px; height: 1.05em; vertical-align: text-bottom; margin-left: 2px; background: var(--accent); border-radius: 1px; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .thinking { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .thinking span { width: 6px; height: 6px; border-radius: 50%; background: var(--t3); animation: bob 1.2s infinite; }
+  .thinking span:nth-child(2) { animation-delay: .15s; } .thinking span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bob { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-4px);opacity:1} }
+  .meta { font-size: 11.5px; color: var(--t3); font-family: var(--mono); }
+
+  .welcome { text-align: center; padding: 8vh 8px 0; color: var(--t2); }
+  .welcome h2 { font-size: 26px; font-weight: 600; color: var(--t1); letter-spacing: -0.02em; margin-bottom: 8px; }
+  .welcome p { font-size: 14px; color: var(--t3); margin-bottom: 22px; }
+  .seeds { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 520px; margin: 0 auto; }
+  .seed { padding: 8px 14px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); font-size: 13px; color: var(--t2); transition: background .15s; }
+  .seed:hover:not(:disabled) { background: var(--panel2); color: var(--t1); }
+  .seed:disabled { opacity: .4; cursor: default; }
+
+  /* ---------- Composer ---------- */
+  #composer { flex: 0 0 auto; border-top: 1px solid var(--line); background: var(--bg2); padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); }
+  .composer-inner { max-width: 780px; margin: 0 auto; display: flex; align-items: flex-end; gap: 10px; }
+  #input {
+    flex: 1; resize: none; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 11px 14px; font-size: 16px; line-height: 1.4; max-height: 160px; min-height: 44px; outline: none;
+    transition: border-color .15s;
+  }
+  #input:focus { border-color: rgba(124,157,255,0.4); }
+  #input:disabled { opacity: .5; }
+  .cbtn { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--accent); color: #0a0a0c; transition: filter .15s, opacity .15s; }
+  .cbtn:disabled { opacity: .35; cursor: default; }
+  .cbtn.stop { background: var(--danger); }
+  .cbtn svg { width: 20px; height: 20px; }
+  .liveStat { text-align: center; font-size: 11.5px; color: var(--t3); font-family: var(--mono); height: 14px; margin-top: 6px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot">⚡️</span>
+      <span class="name">Gemma 4 E2B</span>
+      <span class="sub">· WebGPU · on-device</span>
+    </div>
+    <span class="spacer"></span>
+    <button id="newBtn" class="hbtn" disabled>＋ New session</button>
+    <button id="loadBtn" class="hbtn primary">Load model</button>
+  </header>
+
+  <div id="statusbar">
+    <div class="status" id="status">
+      <div class="status-row"><span class="st-dot"></span><span id="statusText">Tap “Load model” to begin.</span></div>
+      <div class="bar" id="bar"><div></div></div>
+    </div>
+  </div>
+
+  <div id="scroll">
+    <div id="thread"></div>
+  </div>
+
+  <div id="composer">
+    <div class="composer-inner">
+      <textarea id="input" rows="1" placeholder="Load the model to start chatting…" disabled></textarea>
+      <button id="sendBtn" class="cbtn" disabled title="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
+      <button id="stopBtn" class="cbtn stop hidden" title="Stop">
+        <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+    </div>
+    <div class="liveStat" id="liveStat"></div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

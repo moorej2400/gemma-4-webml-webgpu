@@ -1,0 +1,13 @@
+# Local HTTPS identity. The server regenerates these files for each developer.
+certs/
+
+# Device diagnostics can contain LAN addresses and browser/device metadata.
+debug.log
+
+# Local tooling and generated working copies.
+.claude/
+docs/superpowers/
+.DS_Store
+node_modules/
+*.bak.js
+*.pretty.js
