@@ -19,6 +19,7 @@ test("uses one 32 MiB loading lane on iOS", () => {
   assert.deepEqual(getLoaderProfile(iphoneSafari), {
     concurrency: 1,
     chunkMaxBytes: IOS_CHUNK_MAX_BYTES,
+    diskBackedPle: true,
   });
   assert.equal(IOS_CHUNK_MAX_BYTES, 32 * 1024 * 1024);
 });

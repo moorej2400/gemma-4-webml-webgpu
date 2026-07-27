@@ -16,6 +16,8 @@ Use this workflow to verify WebGPU behavior on a physical iPhone rather than rel
 From the project directory, run:
 
 ```sh
+npm install
+npm run prepare-runtime
 node server.js
 ```
 
@@ -57,6 +59,39 @@ The profile contains only the public CA certificate. Private keys remain under t
 8. Use `Timelines` for expensive loading or inference work.
 
 The development server also prints forwarded browser diagnostics in its terminal.
+
+## Memory-Safe Model Check
+
+1. Close other tabs running this app.
+2. Open the HTTPS app URL in one iPhone Safari tab.
+3. Select **Load model** and keep Safari in the foreground.
+4. Confirm loading reaches **Ready** without Safari reloading or closing the page.
+5. Send a short prompt and confirm text is generated.
+6. Open the same URL in a second tab and select **Load model**.
+7. Confirm the second tab reports that another tab owns the model instead of
+   starting a second download.
+8. Return to the first tab, use the unload button, then retry in the second tab.
+9. Confirm the second tab can now load the model.
+
+On iPhone, the app uses one download lane with 32 MiB pieces. The oversized
+embedding is written to origin-private file storage. Inference reads only the
+rows needed for the current tokens into a compact GPU cache, so Safari never
+needs the full 1.1 GiB table in resident GPU memory.
+
+## Verified Physical-Device Result
+
+The memory-safe path was verified on a physical iPhone running iOS 18.7 and
+Safari 26.5.2:
+
+- Secure context and WebGPU available
+- Apple adapter limit: 1 GiB per buffer and storage binding
+- Full 2.46 GB model load completed in 138.3 seconds
+- No page reload past the previous 1.78 GB failure point
+- Exact prompt response generated successfully
+- Measured TTFT: 411 ms
+- Measured generation rate: 20.7 tokens/second
+- Explicit unload completed and released ownership
+- Same page reacquired and returned to ready from cache in 6.0 seconds
 
 ## WebGPU Smoke Check
 

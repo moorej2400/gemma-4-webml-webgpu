@@ -109,7 +109,7 @@ then acquire.
 Run:
 
 ```bash
-NODE_PATH=/Users/jaredmoore/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules \
+NODE_PATH=/path/to/playwright/node_modules \
   node --test tests/browser-model-session.test.mjs
 ```
 
@@ -249,7 +249,7 @@ Run:
 
 ```bash
 node --test tests/app-contract.test.mjs tests/model-lifecycle.test.mjs
-NODE_PATH=/Users/jaredmoore/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules \
+NODE_PATH=/path/to/playwright/node_modules \
   node --test tests/browser-app-ownership.test.mjs
 node --check app.js
 node --check gemma-4-e2b.pretty.js

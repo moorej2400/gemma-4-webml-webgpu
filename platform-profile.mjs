@@ -9,5 +9,6 @@ export function getLoaderProfile(userAgent = globalThis.navigator?.userAgent ?? 
   return {
     concurrency: 1,
     chunkMaxBytes: IOS_CHUNK_MAX_BYTES,
+    diskBackedPle: true,
   };
 }

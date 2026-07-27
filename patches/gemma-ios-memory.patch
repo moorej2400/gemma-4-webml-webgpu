@@ -1,0 +1,899 @@
+diff --git a/tmp/gemma-4-e2b.base.pretty.js b/gemma-4-e2b.pretty.js
+index 551472c..de62a66 100644
+--- a/tmp/gemma-4-e2b.base.pretty.js
++++ b/gemma-4-e2b.pretty.js
+@@ -1,4 +1,12 @@
+ // Gemma-4 E2B (QAT mobile) WebGPU chat bundle. Import { Gemma4Mobile } from this file.
++import {
++  coalesceTensorSpans as __coalesceTensorSpans,
++  planTensorSpans as __planTensorSpans,
++  runWithConcurrency as __runWithConcurrency
++} from "./weight-range-plan.mjs";
++import {
++  createDiskBackedEmbeddingWriter as __createDiskBackedEmbeddingWriter
++} from "./disk-backed-embedding.mjs";
+ var ko = Object.defineProperty;
+ var he = (e, n) => () => (e && (n = e(e = 0)), n);
+ var Eo = (e, n) => {
+@@ -12895,6 +12903,12 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
+         }, {
+           role: "Bits",
+           dtype: "uint32"
++        }, {
++          // Optional second row-tile of the packed codes. Present only when the embedding
++          // table is split across two buffers to stay under per-buffer limits (iOS: 1 GiB).
++          role: "Bits1",
++          dtype: "uint32",
++          optional: !0
+         }, {
+           role: "Scale",
+           dtype: "float32"
+@@ -12932,6 +12946,17 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
+             semantic: "Bits",
+             role: "input"
+           },
++          bitsT1: {
++            kind: "tensor",
++            semantic: "Bits1",
++            role: "input",
++            required: !1
++          },
++          tile0Rows: {
++            kind: "u32",
++            semantic: "tile0_rows",
++            required: !1
++          },
+           scaleT: {
+             kind: "tensor",
+             semantic: "Scale",
+@@ -13114,9 +13139,103 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
+             reads: ["Ids", "Bits", "Scale", "W"],
+             writes: ["Out", "Y2", "SumA"]
+           }]
++        }, {
++          // Row-tiled gather: the packed codes are split across two storage buffers
++          // (bits_buf: rows [0, tile0Rows), bits_buf1: the rest). Used when one buffer
++          // would exceed device maxBufferSize / maxStorageBufferBindingSize (iOS: 1 GiB).
++          id: "main_tiled",
++          priority: 4,
++          when: "present.bitsT1 and args.tile0Rows > 0 and (not args.normSrq) and ((args.bits == 2 or args.bits == 4) and args.seq > 0 and args.hidden > 0 and args.groupSize > 0 and args.hidden % args.groupSize == 0 and (args.hidden * args.bits) % 32 == 0 and args.zeroPoint > 0 and (f16Ok(dtypes.O)))",
++          constants: {
++            usesF16: 'dtypes.O == "f16"',
++            outputScalar: "dtypes.O",
++            HIDDEN: "args.hidden",
++            VOCAB: "args.vocab",
++            GROUP_SIZE: "args.groupSize",
++            NUM_GROUPS: "args.hidden / args.groupSize",
++            WORDS_PER_ROW: "args.hidden * args.bits / 32",
++            VALS_PER_WORD: "32 / args.bits",
++            BITS: "args.bits",
++            MASK: "15 if args.bits == 4 else 3",
++            ZP: "args.zeroPoint",
++            EMBED_SCALE: "args.embedScale",
++            TILE0_ROWS: "args.tile0Rows"
++          },
++          passes: [{
++            id: "main",
++            name: "QatEmbedGatherTiled",
++            shader: "qat-embed-gather-tiled.wgsl.jinja",
++            bindings: [{
++              name: "ids",
++              arg: "idsT",
++              semantic: "Ids",
++              role: "input",
++              buffer: {
++                type: "read-only-storage"
++              },
++              elementType: "u32"
++            }, {
++              name: "bits_buf",
++              arg: "bitsT",
++              semantic: "Bits",
++              role: "input",
++              buffer: {
++                type: "read-only-storage"
++              },
++              elementType: "u32"
++            }, {
++              name: "bits_buf1",
++              arg: "bitsT1",
++              semantic: "Bits1",
++              role: "input",
++              buffer: {
++                type: "read-only-storage"
++              },
++              elementType: "u32"
++            }, {
++              name: "scale",
++              arg: "scaleT",
++              semantic: "Scale",
++              role: "input",
++              buffer: {
++                type: "read-only-storage"
++              },
++              elementType: "f32"
++            }, {
++              name: "y",
++              arg: "yT",
++              semantic: "Out",
++              role: "output",
++              buffer: {
++                type: "storage"
++              },
++              elementType: "$O"
++            }, {
++              name: "params",
++              semantic: "kernel.params",
++              buffer: {
++                type: "uniform"
++              },
++              struct: {
++                name: "Params",
++                fields: [{
++                  name: "seq",
++                  type: "u32",
++                  value: "args.seq"
++                }]
++              }
++            }],
++            dispatch: {
++              x: "args.seq",
++              y: 1,
++              z: 1
++            },
++            reads: ["Ids", "Bits", "Bits1", "Scale"],
++            writes: ["Out"]
++          }]
+         }, {
+           id: "main",
+-          when: "(not args.normSrq) and ((args.bits == 2 or args.bits == 4) and args.seq > 0 and args.hidden > 0 and args.groupSize > 0 and args.hidden % args.groupSize == 0 and (args.hidden * args.bits) % 32 == 0 and args.zeroPoint > 0 and (f16Ok(dtypes.O)))",
++          when: "(not present.bitsT1) and (not args.normSrq) and ((args.bits == 2 or args.bits == 4) and args.seq > 0 and args.hidden > 0 and args.groupSize > 0 and args.hidden % args.groupSize == 0 and (args.hidden * args.bits) % 32 == 0 and args.zeroPoint > 0 and (f16Ok(dtypes.O)))",
+           constants: {
+             usesF16: 'dtypes.O == "f16"',
+             outputScalar: "dtypes.O",
+@@ -13385,6 +13504,68 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
+     w = w + WG;
+   }
+ }
++`],
++        ["qat-embed-gather-tiled.wgsl.jinja", `{% if usesF16 %}
++enable f16;
++{% endif %}
++{{ env.wgsl.resourceDeclarations }}
++
++// Row-tiled variant of qat-embed-gather: the packed codes are split row-wise across
++// two storage buffers — bits_buf holds rows [0, TILE0_ROWS), bits_buf1 the rest — so
++// an embedding table larger than the device's per-buffer/binding limit (iOS: 1 GiB)
++// can still be gathered. The tile branch is uniform per token row, so it costs one
++// predictable comparison per word read.
++
++const HIDDEN:        u32 = {{ HIDDEN }}u;
++const VOCAB:         u32 = {{ VOCAB }}u;
++const GROUP_SIZE:    u32 = {{ GROUP_SIZE }}u;
++const NUM_GROUPS:    u32 = {{ NUM_GROUPS }}u;
++const WORDS_PER_ROW: u32 = {{ WORDS_PER_ROW }}u;
++const VALS_PER_WORD: u32 = {{ VALS_PER_WORD }}u;
++const BITS:          u32 = {{ BITS }}u;
++const MASK:          u32 = {{ MASK }}u;
++const ZP:            f32 = {{ ZP }}.0;
++const EMBED_SCALE:   f32 = {{ EMBED_SCALE }};
++const TILE0_ROWS:    u32 = {{ TILE0_ROWS }}u;
++const WG: u32 = 64u;
++
++fn bits_word(id: u32, w: u32) -> u32 {
++  if (id < TILE0_ROWS) {
++    return bits_buf[id * WORDS_PER_ROW + w];
++  }
++  return bits_buf1[(id - TILE0_ROWS) * WORDS_PER_ROW + w];
++}
++
++@compute @workgroup_size(64, 1, 1)
++fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
++  let t = wg.x;
++  if (t >= params.seq) {
++    return;
++  }
++  let id = ids[t];
++  if (id >= VOCAB) {
++    return;
++  }
++
++  let row_scale_base: u32 = id * NUM_GROUPS;
++
++  var w: u32 = lid.x;
++  loop {
++    if (w >= WORDS_PER_ROW) {
++      break;
++    }
++    let packed: u32 = bits_word(id, w);
++    let colBase: u32 = w * VALS_PER_WORD;
++    for (var v: u32 = 0u; v < VALS_PER_WORD; v = v + 1u) {
++      let c: u32 = colBase + v;
++      let g: u32 = c / GROUP_SIZE;
++      let s: f32 = scale[row_scale_base + g];
++      let q: f32 = f32((packed >> (v * BITS)) & MASK);
++      y[t * HIDDEN + c] = {{ outputScalar }}(EMBED_SCALE * s * (q - ZP));
++    }
++    w = w + WG;
++  }
++}
+ `]
+       ]
+     }],
+@@ -19206,9 +19387,9 @@ var md = 128 << 20,
+       onProgress: o,
+       signal: i
+     } = {}) {
+-      let u = this.#a(s);
++      let u = __planTensorSpans(this.#n, s, t);
+       if (u.length === 0) return;
+-      let l = yd(u, {
++      let l = __coalesceTensorSpans(u, {
+           maxBytes: t,
+           maxGap: a
+         }),
+@@ -19227,7 +19408,6 @@ var md = 128 << 20,
+         },
+         m = this.#r,
+         _ = this.#e,
+-        E = 0,
+         b = async G => {
+           let {
+             begin: C,
+@@ -19258,7 +19438,9 @@ var md = 128 << 20,
+             Q = D.map(g => ({
+               name: g.name,
+               offset: g.begin - C,
+-              length: g.end - g.begin
++              length: g.end - g.begin,
++              pieceOffset: g.pieceOffset,
++              pieceTotal: g.pieceTotal
+             })),
+             ve = Promise.resolve(n({
+               begin: P,
+@@ -19275,38 +19457,51 @@ var md = 128 << 20,
+             fromCache: ne,
+             range: [P, N]
+           })
+-        }, W = async () => {
+-          for (;;) {
+-            if (i?.aborted) throw i.reason ?? new Error("aborted");
+-            let G = E++;
+-            if (G >= l.length) return;
+-            await b(G)
+-          }
+-        }, q = [];
+-      for (let G = 0; G < Math.min(r, l.length); ++G) q.push(W());
+-      await Promise.all(q)
++        };
++      await __runWithConcurrency(l, r, async (G, C) => {
++        if (i?.aborted) throw i.reason ?? new Error("aborted");
++        await b(C)
++      })
+     }
+     async close() {
+       await this.#e.close()
+     }
+-    #a(n) {
+-      let r = n == null ? null : new Set(n);
+-      if (r && r.size === 0) return [];
+-      if (r) {
+-        for (let a of r)
+-          if (!this.#n.has(a)) throw new B(`Unknown tensor: ${a}`)
++    #a(n, r = null) {
++      let t = n == null ? null : new Set(n);
++      if (t && t.size === 0) return [];
++      if (t) {
++        for (let i of t)
++          if (!this.#n.has(i)) throw new B(`Unknown tensor: ${i}`)
+       }
+-      let t = [];
+-      for (let [a, s] of this.#n) {
+-        if (r && !r.has(a)) continue;
+-        let [o, i] = s.dataOffsets;
+-        i > o && t.push({
+-          name: a,
+-          begin: o,
+-          end: i
++      // Tensors larger than this are emitted as multiple piece-spans so no single fetch,
++      // cache entry, or CPU buffer ever holds the whole tensor (iOS Safari jettisons the
++      // tab near ~1 GB of JS-heap allocation). Handlers must support receivePiece for them.
++      let a = 192 * 1024 * 1024,
++        s = Math.max(4, Math.min(r ?? 128 * 1024 * 1024, 128 * 1024 * 1024) & ~3),
++        o = [];
++      for (let [i, u] of this.#n) {
++        if (t && !t.has(i)) continue;
++        let [l, c] = u.dataOffsets,
++          d = c - l;
++        if (d <= 0) continue;
++        if (d > a) {
++          for (let p = 0; p < d; p += s) {
++            let f = Math.min(p + s, d);
++            o.push({
++              name: i,
++              begin: l + p,
++              end: l + f,
++              pieceOffset: p,
++              pieceTotal: d
++            })
++          }
++        } else o.push({
++          name: i,
++          begin: l,
++          end: c
+         })
+       }
+-      return t.sort((a, s) => a.begin - s.begin), t
++      return o.sort((i, u) => i.begin - u.begin), o
+     }
+     #t(n) {
+       let r = this.#n.get(n);
+@@ -19975,6 +20170,7 @@ var br = class {
+     for (let t of this.specs)
+       if (t.type === "tensor") this.#e(t, n, r);
+       else if (t.type === "group") this.#r(t, n, r);
++    else if (t.type === "streamGroup") this.#s(t, n, r);
+     else throw new Error(`Unsupported weight plan spec type: ${t.type}`);
+     return this
+   }
+@@ -19990,7 +20186,20 @@ var br = class {
+       let o = this.handlers.get(s.name);
+       if (!o) continue;
+       let i = n.subarray(s.offset, s.offset + s.length);
+-      a.push($s(o, i, t))
++      if (s.pieceTotal != null && s.pieceTotal !== s.length) {
++        // Partial tensor piece (oversized tensor split by the source). Only handlers with
++        // receivePiece can consume these; tensor-progress fires when the last piece lands.
++        if (!o.receivePiece) throw new Error(`Tensor ${s.name} arrived in pieces but its handler cannot stream`);
++        a.push(o.receivePiece(i, {
++          pieceOffset: s.pieceOffset,
++          pieceTotal: s.pieceTotal
++        }, t).then(u => {
++          u && t.onTensorProgress?.({
++            name: o.name,
++            label: o.progressLabel
++          })
++        }))
++      } else a.push($s(o, i, t))
+     }
+     a.length && await Promise.all(a)
+   }
+@@ -20046,6 +20255,51 @@ var br = class {
+       }
+     }, n.progressLabel ?? u)
+   }
++  #s(n, r, t) {
++    // streamGroup: tensors may arrive as out-of-order byte pieces; onPiece consumes each
++    // immediately (e.g. straight into a GPU buffer) so the full tensor never sits in JS memory.
++    let a = {},
++      s = n.names.filter(u => {
++        let l = Ks(r, u);
++        return l && (a[u] = l), !l
++      });
++    if (s.length > 0) {
++      Vs(n, t, s);
++      return
++    }
++    for (let u of n.names) Hs(n, a[u], u);
++    let o = new Map,
++      i = n.names.length,
++      handlePiece = async (u, l, c, d) => {
++        let p = c.pieceTotal ?? l.byteLength;
++        await n.onPiece(u, l, {
++          pieceOffset: c.pieceOffset ?? 0,
++          pieceTotal: p,
++          description: a[u]
++        }, {
++          ...t,
++          ...d
++        });
++        let f = (o.get(u) ?? 0) + l.byteLength;
++        if (o.set(u, f), f > p) throw new Error(`streamGroup ${u}: received ${f} bytes, expected ${p}`);
++        return f === p && (this.pending.delete(u), --i === 0 && await n.onComplete({
++          ...t,
++          ...d,
++          descriptions: a
++        })), f === p
++      };
++    for (let u of n.names) {
++      if (this.handlers.has(u)) throw new Error(`Duplicate WeightPlan handler for tensor: ${u}`);
++      this.handlers.set(u, {
++        name: u,
++        progressLabel: n.progressLabel ?? u,
++        receive: async (l, c) => {
++          await handlePiece(u, l, {}, c)
++        },
++        receivePiece: (l, c, d) => handlePiece(u, l, c, d)
++      }), this.pending.add(u)
++    }
++  }
+   #n(n, r, t = n) {
+     if (this.handlers.has(n)) throw new Error(`Duplicate WeightPlan handler for tensor: ${n}`);
+     this.handlers.set(n, {
+@@ -20197,6 +20451,17 @@ function wr(e) {
+       ...e
+     }
+   }
++  if (e.type === "streamGroup") {
++    // Like "group", but tensors may arrive as byte pieces (see source #a splitting) and are
++    // forwarded incrementally via onPiece(name, bytes, {pieceOffset, pieceTotal, description}, ctx);
++    // onComplete(ctx) fires once every named tensor has received all of its bytes.
++    if (!Array.isArray(e.names) || e.names.length === 0) throw new Error("WeightPlan streamGroup spec requires a non-empty names array");
++    if (typeof e.onPiece != "function" || typeof e.onComplete != "function") throw new Error("WeightPlan streamGroup spec requires onPiece and onComplete functions");
++    return {
++      required: !0,
++      ...e
++    }
++  }
+   throw new Error(`Unknown WeightPlan spec type: ${e.type}`)
+ }
+ async function Xd(e, n, r) {
+@@ -20347,6 +20612,7 @@ function $e(e) {
+ var gn = "model.language_model";
+ async function ro(e, n, r, t = {}) {
+   let a = [],
++    diskWriters = [],
+     s = (c, d, p, f, m, _ = !1) => {
+       a.push(Ln({
+         names: [`${c}.weight`, `${c}.weight_scale`, `${c}.input_activation_scale`, `${c}.output_activation_scale`],
+@@ -20419,6 +20685,106 @@ async function ro(e, n, r, t = {}) {
+         }
+       }))
+     },
++    oT = (c, d, p, f, m, _) => {
++      // Streaming, row-tiled variant of o() for embedding tables too large to hold in one
++      // JS or GPU buffer (iOS caps both near 1 GiB; the PLE table is 1.09 GiB). Pieces are
++      // written straight into two row-tiles via writeBuffer as they download, so peak CPU
++      // memory stays at one piece (<=128 MB) and each GPU buffer stays under device limits.
++      let E = null,
++        b = 0,
++        W = null,
++        q = 0,
++        G = 0;
++      a.push({
++        type: "streamGroup",
++        names: [`${c}.embedding_quantized`, `${c}.embedding_scale`],
++        progressLabel: c,
++        onPiece: async (C, S, {
++          pieceOffset: D,
++          pieceTotal: P
++        }) => {
++          if (C === `${c}.embedding_scale`) {
++            W = $e(S);
++            return
++          }
++          if (!E) {
++            q = P * 8 / (d * p);
++            if (q !== 2 && q !== 4 && q !== 8) throw new Error(`${c}: derived ${q}-bit from ${P} bytes for [${d}, ${p}]`);
++            G = Math.ceil(d / 2);
++            let N = p * q / 32;
++            b = G * N * 4, E = [e.allocateWeightsBuffer({
++              byteLength: b,
++              dtype: "uint32",
++              shape: [G, N],
++              label: `${c}.bits.t0`
++            }), e.allocateWeightsBuffer({
++              byteLength: P - b,
++              dtype: "uint32",
++              shape: [d - G, N],
++              label: `${c}.bits.t1`
++            })]
++          }
++          if (D < b) {
++            let N = Math.min(S.byteLength, b - D);
++            e.writeWeightsRange(E[0], D, S.subarray(0, N)), N < S.byteLength && e.writeWeightsRange(E[1], 0, S.subarray(N))
++          } else e.writeWeightsRange(E[1], D - b, S)
++        },
++        onComplete: async () => {
++          if (!E || !W) throw new Error(`Missing tensors for ${c}`);
++          let C = e.tensorFromTypedArray("float32", [d, m], W);
++          _({
++            bitsT: E[0],
++            bitsT1: E[1],
++            tile0Rows: G,
++            scaleT: C,
++            bits: q
++          })
++        }
++      })
++    },
++    oD = (c, d, p, f, m, _) => {
++      let E = null,
++        b = null;
++      a.push({
++        type: "streamGroup",
++        names: [`${c}.embedding_quantized`, `${c}.embedding_scale`],
++        progressLabel: c,
++        onPiece: async (W, q, {
++          pieceOffset: G,
++          pieceTotal: C
++        }) => {
++          if (W === `${c}.embedding_scale`) {
++            b = $e(q).slice();
++            return
++          }
++          if (!E) {
++            let S = C * 8 / (d * p);
++            if (S !== f) throw new Error(`${c}: derived ${S}-bit from ${C} bytes for [${d}, ${p}]`);
++            E = await __createDiskBackedEmbeddingWriter({
++              fileName: `gemma4-ple-${d}-${p}-${S}.bin`,
++              rows: d,
++              hidden: p,
++              groups: m,
++              bits: S
++            }), diskWriters.push(E)
++          }
++          await E.writeQuantized(q, {
++            pieceOffset: G,
++            pieceTotal: C
++          })
++        },
++        onComplete: async () => {
++          if (!E || !b) throw new Error(`Missing tensors for ${c}`);
++          E.setScale(b);
++          let W = await E.finish();
++          _({
++            diskBacked: !0,
++            store: W,
++            bits: f
++          })
++        }
++      })
++    },
+     i = (c, d, p, f) => {
+       a.push(Ln({
+         names: [`${c}.weight`, `${c}.weight_scale`, `${c}.input_activation_scale`, `${c}.output_activation_scale`],
+@@ -20483,7 +20849,7 @@ async function ro(e, n, r, t = {}) {
+     };
+   o(`${gn}.embed_tokens`, n.vocab_size, n.hidden_size, 2, 1, c => {
+     l.embedTokens = c
+-  }), o(`${gn}.embed_tokens_per_layer`, n.vocab_size_per_layer_input, n.num_hidden_layers * n.hidden_size_per_layer_input, 4, n.num_hidden_layers, c => {
++  }), (t.diskBackedPle ? oD : oT)(`${gn}.embed_tokens_per_layer`, n.vocab_size_per_layer_input, n.num_hidden_layers * n.hidden_size_per_layer_input, 4, n.num_hidden_layers, c => {
+     l.embedTokensPerLayer = c
+   }), u(`${gn}.per_layer_model_projection.weight`, [n.num_hidden_layers * n.hidden_size_per_layer_input, n.hidden_size], c => {
+     l.perLayerModelProjection = c
+@@ -20534,20 +20900,36 @@ async function ro(e, n, r, t = {}) {
+       f.perLayerProjection = m
+     })
+   }
+-  await Zs(a, {
+-    source: r,
+-    reader: Js(r),
+-    context: {
+-      rt: e
+-    },
+-    concurrency: t.concurrency,
+-    chunkMaxBytes: t.chunkMaxBytes,
+-    onProgress: t.onProgress ?? null,
+-    signal: t.signal
+-  });
++  try {
++    await Zs(a, {
++      source: r,
++      reader: Js(r),
++      context: {
++        rt: e
++      },
++      concurrency: t.concurrency,
++      chunkMaxBytes: t.chunkMaxBytes,
++      onProgress: t.onProgress ?? null,
++      signal: t.signal
++    })
++  } catch (c) {
++    await Promise.all(diskWriters.map(d => d.abort(c)));
++    throw c
++  }
+   for (let c of l.layers) c.gateGeluLutT = e.tensorFromTypedArray("float32", [256], kt(c.gateProj.outScale)), c.pleGeluLutT = e.tensorFromTypedArray("float32", [256], kt(c.perLayerInputGate.outScale));
+   return l
+ }
++
++function createPleSession(e, n, r, t, a) {
++  if (e.diskBacked) return e.store.createSession(n, r);
++  return {
++    ...e,
++    idsT: t,
++    vocab: a,
++    async prepare() {},
++    dispose() {}
++  }
++}
+ var y = Math.fround,
+   Y = (e, n, r) => y(e * n + r);
+ 
+@@ -21088,6 +21470,9 @@ var oe = {
+         resources: {
+           idsT: n.idsT,
+           bitsT: n.bitsT,
++          ...n.bitsT1 ? {
++            bitsT1: n.bitsT1
++          } : {},
+           scaleT: n.scaleT,
+           yT: n.yT,
+           ...r ? {
+@@ -21104,6 +21489,7 @@ var oe = {
+           groupSize: n.groupSize,
+           zeroPoint: hn(n.bits),
+           embedScale: n.embedScale,
++          tile0Rows: n.tile0Rows ?? 0,
+           normSrq: r ? 1 : 0,
+           eps: n.eps ?? 0,
+           inScale: n.inScale ?? 0
+@@ -21433,7 +21819,7 @@ async function Ot(e, n, r, t, a = !1, s, o = !0) {
+     allLogits: new Float32Array(0)
+   } : void 0, V = s ? async (z, j) => {
+     await S.flush(), s.set(z, await nn(i, j))
+-  }: null;
++  }: null, pleSession = null;
+   try {
+     let z = N([1], new Float32Array([1 / Math.sqrt(d)])),
+       j = N([1], new Float32Array([Math.SQRT1_2])),
+@@ -21460,6 +21846,7 @@ async function Ot(e, n, r, t, a = !1, s, o = !0) {
+       fe = P([c, W], "g4-aqQ"),
+       pe = P([c, C], "g4-aqI"),
+       ue = P([c, d], "g4-nrm-tail");
++    pleSession = createPleSession(l.embedTokensPerLayer, i, c, ne, u.vocab_size_per_layer_input), await pleSession.prepare(n);
+     S.qatEmbed({
+       idsT: ne,
+       bitsT: l.embedTokens.bitsT,
+@@ -21476,14 +21863,16 @@ async function Ot(e, n, r, t, a = !1, s, o = !0) {
+       let we = P([c, m], "g4-ple-id"),
+         H = P([c, m], "g4-ple-proj");
+       S.qatEmbed({
+-        idsT: ne,
+-        bitsT: l.embedTokensPerLayer.bitsT,
+-        scaleT: l.embedTokensPerLayer.scaleT,
++        idsT: pleSession.idsT,
++        bitsT: pleSession.bitsT,
++        bitsT1: pleSession.bitsT1,
++        tile0Rows: pleSession.tile0Rows,
++        scaleT: pleSession.scaleT,
+         yT: we,
+         seq: c,
+         hidden: m,
+-        vocab: u.vocab_size_per_layer_input,
+-        bits: l.embedTokensPerLayer.bits,
++        vocab: pleSession.vocab,
++        bits: pleSession.bits,
+         groupSize: f,
+         embedScale: u.perLayerEmbedScale
+       }), S.denseGemv({
+@@ -21755,6 +22144,7 @@ async function Ot(e, n, r, t, a = !1, s, o = !0) {
+       nextToken: zn
+     }
+   } finally {
++    pleSession?.dispose();
+     for (let z of D) en(z)
+   }
+ }
+@@ -21798,6 +22188,7 @@ var Gr = class extends yn {
+   model;
+   cache;
+   idsT;
++  ple;
+   rope;
+   attnUni = new Map;
+   cacheUni = new Map;
+@@ -21810,7 +22201,7 @@ var Gr = class extends yn {
+       config: t,
+       weights: a
+     } = this.model, s = this.col, o = t.hidden_size, i = t.num_hidden_layers, u = t.hidden_size_per_layer_input, l = i * u, c = t.rms_norm_eps, d = t.num_attention_heads, p = t.vocab_size, f = d * t.global_head_dim, m = t.num_key_value_heads, _ = m * t.global_head_dim, E = t.intermediate_size * 2, b = 1, W = this.uploadOwned([1], new Float32Array([1 / Math.sqrt(o)])), q = this.uploadOwned([1], new Float32Array([Math.SQRT1_2]));
+-    this.idsT = this.uploadOwned([b], new Uint32Array([0])), this.rope = rn.create(r, t, b, n), this.owned.push(this.rope.cosSlidingT, this.rope.sinSlidingT, this.rope.cosFullT, this.rope.sinFullT);
++    this.idsT = this.uploadOwned([b], new Uint32Array([0])), this.ple = createPleSession(a.embedTokensPerLayer, r, b, this.idsT, t.vocab_size_per_layer_input), this.rope = rn.create(r, t, b, n), this.owned.push(this.rope.cosSlidingT, this.rope.sinSlidingT, this.rope.cosFullT, this.rope.sinFullT);
+     let G = this.allocOwned([b, o], "g4d-hidden"),
+       C = this.allocOwned([b, l], "g4d-ple"),
+       S = this.allocOwned([b, o], "g4d-normed"),
+@@ -21895,14 +22286,16 @@ var Gr = class extends yn {
+       groupSize: o,
+       embedScale: t.embedScale
+     }), s.qatEmbed({
+-      idsT: this.idsT,
+-      bitsT: a.embedTokensPerLayer.bitsT,
+-      scaleT: a.embedTokensPerLayer.scaleT,
++      idsT: this.ple.idsT,
++      bitsT: this.ple.bitsT,
++      bitsT1: this.ple.bitsT1,
++      tile0Rows: this.ple.tile0Rows,
++      scaleT: this.ple.scaleT,
+       yT: w,
+       seq: b,
+       hidden: l,
+-      vocab: t.vocab_size_per_layer_input,
+-      bits: a.embedTokensPerLayer.bits,
++      vocab: this.ple.vocab,
++      bits: this.ple.bits,
+       groupSize: u,
+       embedScale: t.perLayerEmbedScale
+     }), s.denseGemv({
+@@ -22131,26 +22524,27 @@ var Gr = class extends yn {
+       count: p
+     }), this.steps = await s.buildSteps()
+   }
+-  writeStepInputs(n, r) {
++  async writeStepInputs(n, r) {
+     let {
+       rt: t,
+       config: a
+     } = this.model, s = t.host, o = 1;
+-    n !== null && s.writeBuffer(this.idsT.buffer, 0, new Uint32Array([n])), rn.write(s, a, this.rope, r, o);
++    if (this.ple.diskBacked && n === null) throw new Error("disk-backed PLE requires a resolved token id");
++    await this.ple.prepare(new Uint32Array([n ?? 0])), n !== null && s.writeBuffer(this.idsT.buffer, 0, new Uint32Array([n])), rn.write(s, a, this.rope, r, o);
+     let i = r + o,
+       u = a.num_attention_heads,
+       l = a.num_key_value_heads;
+     for (let [c, d] of this.attnUni) s.writeBuffer(d, 0, new Uint32Array([1, i, r, u, l, c, 0, 0]));
+     for (let [c, d] of this.cacheUni) s.writeBuffer(d, 0, new Uint32Array([1, c, c, 0, c, r * c, 0, 0]))
+   }
+-  submitStep(n, r) {
+-    return this.writeStepInputs(n, r), this.col.enqueue(this.steps), this.model.rt.readTensor(this.idsT).then(t => t[0])
++  async submitStep(n, r) {
++    return await this.writeStepInputs(n, r), this.col.enqueue(this.steps), this.model.rt.readTensor(this.idsT).then(t => t[0])
+   }
+   async step(n, r) {
+     let {
+       rt: t
+     } = this.model;
+-    if (this.writeStepInputs(n, r), yo) {
++    if (await this.writeStepInputs(n, r), yo) {
+       let s = performance.now();
+       this.col.enqueue(this.steps);
+       let o = performance.now();
+@@ -22180,7 +22574,7 @@ var Gr = class extends yn {
+     console.error(`[g4d] per-token median: cpu-encode=${Ft(n).toFixed(2)}ms gpu-compute=${Ft(r).toFixed(2)}ms readback=${Ft(t).toFixed(2)}ms (n=${n.length})`), Ar.length = 0, Rt.length = 0, Wt.length = 0
+   }
+   dispose() {
+-    this.reportTiming(), super.dispose();
++    this.reportTiming(), this.ple?.dispose(), super.dispose();
+     for (let n of [...this.attnUni.values(), ...this.cacheUni.values()]) n.destroy?.();
+     this.attnUni.clear(), this.cacheUni.clear()
+   }
+@@ -22192,6 +22586,7 @@ var Tp = () => !1,
+     cache;
+     blockLen;
+     idsT;
++    ple;
+     tokenIdT;
+     lastRowUniform = null;
+     rope;
+@@ -22225,7 +22620,7 @@ var Tp = () => !1,
+         q = t.intermediate_size * 2,
+         G = this.uploadOwned([1], new Float32Array([1 / Math.sqrt(l)])),
+         C = this.uploadOwned([1], new Float32Array([Math.SQRT1_2]));
+-      this.idsT = this.uploadOwned([i], new Uint32Array(i)), this.tokenIdT = this.uploadOwned([1], new Uint32Array(1));
++      this.idsT = this.uploadOwned([i], new Uint32Array(i)), this.ple = createPleSession(a.embedTokensPerLayer, r, i, this.idsT, t.vocab_size_per_layer_input), this.tokenIdT = this.uploadOwned([1], new Uint32Array(1));
+       let S = this.allocOwned([i, l], "g4p-hidden"),
+         D = this.allocOwned([i, p], "g4p-ple"),
+         P = this.allocOwned([i, l], "g4p-normed"),
+@@ -22264,14 +22659,16 @@ var Tp = () => !1,
+       let K = this.allocOwned([i, p], "g4p-ple-id"),
+         M = this.allocOwned([i, p], "g4p-ple-proj");
+       s.qatEmbed({
+-        idsT: this.idsT,
+-        bitsT: a.embedTokensPerLayer.bitsT,
+-        scaleT: a.embedTokensPerLayer.scaleT,
++        idsT: this.ple.idsT,
++        bitsT: this.ple.bitsT,
++        bitsT1: this.ple.bitsT1,
++        tile0Rows: this.ple.tile0Rows,
++        scaleT: this.ple.scaleT,
+         yT: K,
+         seq: i,
+         hidden: p,
+-        vocab: t.vocab_size_per_layer_input,
+-        bits: a.embedTokensPerLayer.bits,
++        vocab: this.ple.vocab,
++        bits: this.ple.bits,
+         groupSize: d,
+         embedScale: t.perLayerEmbedScale
+       }), ie.has("ple") || s.denseGemv({
+@@ -22548,7 +22945,7 @@ var Tp = () => !1,
+         rt: t,
+         config: a
+       } = this.model, s = t.host, o = this.blockLen, i = new Uint32Array(o);
+-      i.set(n), s.writeBuffer(this.idsT.buffer, 0, i), rn.write(s, a, this.rope, r, o);
++      i.set(n), await this.ple.prepare(i), s.writeBuffer(this.idsT.buffer, 0, i), rn.write(s, a, this.rope, r, o);
+       let u = a.num_attention_heads,
+         l = a.num_key_value_heads,
+         c = r + o;
+@@ -22557,6 +22954,9 @@ var Tp = () => !1,
+       let d = this.hiddenSize;
+       return s.writeBuffer(this.lastRowUniform, 0, new Uint32Array([1, d, d, (n.length - 1) * d, d, 0, 0, 0])), this.col.enqueue(this.steps), (await t.readTensor(this.tokenIdT))[0]
+     }
++    dispose() {
++      this.ple?.dispose(), super.dispose()
++    }
+   };
+ async function* wo(e) {
+   let n = [];
+@@ -22611,7 +23011,10 @@ var Wr = class e {
+     try {
+       let l = await ro(n, i, u, {
+         onProgress: a.onProgress ?? null,
+-        signal: a.signal
++        signal: a.signal,
++        concurrency: a.concurrency,
++        chunkMaxBytes: a.chunkMaxBytes,
++        diskBackedPle: a.diskBackedPle
+       });
+       return new e({
+         runtime: n,
+@@ -22725,7 +23128,7 @@ var Wr = class e {
+       p = 0,
+       f = null;
+     try {
+-      if (vo > 1) {
++      if (vo > 1 && !this.weights.embedTokensPerLayer.diskBacked) {
+         if (o && Rr(d, s) || (yield d, p += 1, p >= a)) return;
+         let m = f = await this.#s(r, u),
+           _ = a - p,
+@@ -22769,6 +23172,17 @@ function Ep(e, n = "main") {
+   let r = e ?? To;
+   return /^https?:/i.test(r) || r.startsWith("/") || r.startsWith(".") ? r : `${xp}/${r}/resolve/${n}`
+ }
++
++async function withOwnedRuntime(e, n, r) {
++  let t = e ?? await n(),
++    a = !e;
++  try {
++    return await r(t, a)
++  } catch (s) {
++    if (a) await t.destroy();
++    throw s
++  }
++}
+ var Mt = class e {
+   static DEFAULT_MODEL_ID = To;
+   #e;
+@@ -22799,10 +23213,8 @@ var Mt = class e {
+       status: "init",
+       message: "Requesting WebGPU device"
+     });
+-    let i = r.runtime ?? await vs(r.runtimeOptions ?? {}),
+-      u = !r.runtime;
+-    i.captureShaders = !0;
+-    try {
++    return withOwnedRuntime(r.runtime, () => vs(r.runtimeOptions ?? {}), async (i, u) => {
++      i.captureShaders = !0;
+       t({
+         status: "tokenizer",
+         message: "Loading tokenizer"
+@@ -22825,6 +23237,9 @@ var Mt = class e {
+         cacheName: r.cacheName,
+         fetch: s,
+         signal: r.signal,
++        concurrency: r.concurrency,
++        chunkMaxBytes: r.chunkMaxBytes,
++        diskBackedPle: r.diskBackedPle,
+         onProgress: m => {
+           let _ = m;
+           if (bn(_.processed)) {
+@@ -22862,9 +23277,7 @@ var Mt = class e {
+         tokenizerConfig: d,
+         eosTokenIds: p
+       })
+-    } catch (l) {
+-      throw u && await i.destroy(), l
+-    }
++    })
+   }
+   get runtime() {
+     return this.#e
+@@ -22992,8 +23405,8 @@ var Mt = class e {
+   #c() {
+     this.#o.cache.truncate(0), this.#u = []
+   }
+-  dispose() {
+-    this.#l || (this.#l = !0, this.#n.dispose(), this.#r && this.#e.destroy())
++  async dispose() {
++    this.#l || (this.#l = !0, this.#n.dispose(), this.#r && await this.#e.destroy())
+   }
+ };
+ async function Pp(e, n) {
+@@ -23036,5 +23449,5 @@ function Op(e) {
+ var gy = Mt;
+ export {
+   To as DEFAULT_MODEL_ID, Mt as Gemma4Mobile, gy as
+-  default, Ep as resolveModelRoot
+-};
+\ No newline at end of file
++  default, Ep as resolveModelRoot, withOwnedRuntime
++};

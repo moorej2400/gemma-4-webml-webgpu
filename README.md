@@ -4,7 +4,9 @@ On-device AI chat that runs directly in a supported web browser.
 
 This project pairs Gemma 4 with custom WebGPU kernels, a focused chat interface, and a practical way to test the experience on a real iPhone. Conversations stay in the browser; the model files are downloaded from Hugging Face when you load the model.
 
-> **Project status:** Working prototype for browser and physical-iPhone testing. Browser support and available memory still determine whether the model can load successfully.
+> **Project status:** Verified on a physical iPhone with local generation at
+> 20.7 tokens/second. Browser support, free device storage, and available memory
+> still determine whether the model can load successfully.
 
 ## What It Does
 
@@ -18,13 +20,22 @@ This project pairs Gemma 4 with custom WebGPU kernels, a focused chat interface,
 
 You need a current version of Node.js and a browser with WebGPU support.
 
+Install the small build dependency, then download and prepare the browser
+runtime from its original source:
+
 ```sh
+npm install
+npm run prepare-runtime
 node server.js
 ```
 
 Then open `http://localhost:8080` on the same computer and select **Load model**.
 
 The first load downloads the model from Hugging Face and can take some time. Later loads may use the browser cache.
+
+The app does not load the model automatically. Select **Load model** when you
+are ready. Only one tab can own the model at a time, which prevents two Safari
+pages from exhausting an iPhone's memory.
 
 ## Test On iPhone
 
@@ -33,6 +44,7 @@ iPhone testing requires local HTTPS and trusting a development certificate gener
 ## Learn More
 
 - [Technical overview](docs/technical-overview.md)
+- [Runtime preparation](docs/runtime-preparation.md)
 - [Real iPhone Safari testing](docs/real-iphone-safari-testing.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 

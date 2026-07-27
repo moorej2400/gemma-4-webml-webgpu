@@ -1,0 +1,7 @@
+{
+  "sourceUrl": "https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels/resolve/main/gemma-4-e2b.js",
+  "sourceSha256": "0234c0e866bfaa9623e938a7cfa7f5740cca22532cc1112dd4e8915b97f78d62",
+  "patch": "patches/gemma-ios-memory.patch",
+  "output": "gemma-4-e2b.pretty.js",
+  "patchedSha256": "e6f785d053fc13d149b149fed72948d0225bcac4d66094abdc9d24c14c677d18"
+}
