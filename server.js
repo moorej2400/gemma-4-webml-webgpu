@@ -7,9 +7,11 @@
  *   • Accepts WebSocket connections at /__debug from debug-client.js and prints the phone's console +
  *     errors + WebGPU capability dump to this terminal (and appends to debug.log).
  *   • Control endpoints for the developer (curl-able from another shell):
- *       GET /__cmd/reload            → tell every connected page to location.reload()
- *       GET /__cmd/eval?code=...     → eval a snippet on every page; result streams back as a log
- *       GET /__cmd/clients           → list connected pages
+ *       GET /__cmd/reload            → reload connected pages
+ *       GET /__cmd/load-model        → acquire ownership and load on connected pages
+ *       GET /__cmd/dispose-model     → dispose the selected owner's model
+ *       GET /__cmd/run-prompt        → run a bounded prompt on one selected page
+ *       GET /__cmd/clients           → list connected page ids
  *
  * Run:  node server.js   (listens on 0.0.0.0:8443)
  */
@@ -173,9 +175,14 @@ function printClientEvent(id, evt) {
     process.stdout.write(tag + " " + C.cyan + s + C.reset + "\n");
     logToFile(plain + s.replace(/\n/g, "\n" + plain));
   } else if (evt.t === "gpu") {
-    const s = `GPU  vendor=${evt.vendor} arch=${evt.architecture} device=${evt.device} desc=${evt.description || ""}\n     fallback=${evt.isFallbackAdapter} shader-f16=${evt.hasShaderF16}\n     limits=${JSON.stringify(evt.limits)}\n     features=${(evt.features || []).join(",")}`;
+    const features = evt.features || {};
+    const s = `GPU  vendor=${evt.vendor} arch=${evt.architecture} device=${evt.device} desc=${evt.description || ""}\n     fallback=${evt.isFallbackAdapter} shader-f16=${features.shaderF16 ?? evt.hasShaderF16}\n     features=${JSON.stringify(features)}`;
     process.stdout.write(tag + " " + C.green + s + C.reset + "\n");
     logToFile(plain + s.replace(/\n/g, "\n" + plain));
+  } else if (evt.t === "command-result") {
+    const s = `CMD  ${evt.command} ok=${evt.ok} state=${evt.state}${evt.error ? " error=" + evt.error : ""}`;
+    process.stdout.write(tag + " " + (evt.ok ? C.green : C.red) + s + C.reset + "\n");
+    logToFile(plain + s);
   } else if (evt.t === "hello") {
     process.stdout.write(tag + " " + C.dim + "connected" + C.reset + "\n");
   } else {
@@ -217,6 +224,14 @@ function broadcast(obj) {
   const str = JSON.stringify(obj);
   for (const sock of clients.values()) wsSend(sock, str);
   return clients.size;
+}
+
+function sendToClients(obj, targetId = null) {
+  if (targetId === null) return broadcast(obj);
+  const socket = clients.get(targetId);
+  if (!socket) return 0;
+  wsSend(socket, JSON.stringify(obj));
+  return 1;
 }
 
 function handleUpgrade(req, socket) {
@@ -291,18 +306,35 @@ function serveStatic(req, res) {
 
   // ---- developer control endpoints ----
   if (pathname === "/__cmd/reload") {
-    const n = broadcast({ cmd: "reload" });
+    const target = parseClientTarget(url);
+    const n = sendToClients({ cmd: "reload" }, target);
     console.log(C.cyan + `[cmd] reload → ${n} client(s)` + C.reset);
     return json(res, { ok: true, reloaded: n });
   }
-  if (pathname === "/__cmd/eval") {
-    const code = url.searchParams.get("code") || "";
-    const n = broadcast({ cmd: "eval", code });
-    console.log(C.cyan + `[cmd] eval → ${n} client(s): ${code}` + C.reset);
-    return json(res, { ok: true, sent: n, code });
+  if (pathname === "/__cmd/load-model" || pathname === "/__cmd/dispose-model") {
+    const command = pathname.slice("/__cmd/".length);
+    const requestId = crypto.randomUUID();
+    const target = parseClientTarget(url);
+    const n = sendToClients({ cmd: command, requestId }, target);
+    console.log(C.cyan + `[cmd] ${command} → ${n} client(s)` + C.reset);
+    return json(res, { ok: true, command, requestId, sent: n });
+  }
+  if (pathname === "/__cmd/run-prompt") {
+    const prompt = (url.searchParams.get("prompt") || "").trim();
+    const maxNewTokens = Number(url.searchParams.get("maxNewTokens") || 64);
+    const target = parseClientTarget(url);
+    if (target === null) return json(res, { ok: false, error: "client is required" }, 400);
+    if (!prompt || prompt.length > 2000) return json(res, { ok: false, error: "prompt must be 1-2000 characters" }, 400);
+    if (!Number.isInteger(maxNewTokens) || maxNewTokens < 1 || maxNewTokens > 512) {
+      return json(res, { ok: false, error: "maxNewTokens must be an integer from 1 to 512" }, 400);
+    }
+    const requestId = crypto.randomUUID();
+    const n = sendToClients({ cmd: "run-prompt", requestId, prompt, maxNewTokens }, target);
+    console.log(C.cyan + `[cmd] run-prompt → ${n} client(s)` + C.reset);
+    return json(res, { ok: n === 1, command: "run-prompt", requestId, sent: n }, n === 1 ? 200 : 404);
   }
   if (pathname === "/__cmd/clients") {
-    return json(res, { clients: clients.size });
+    return json(res, { clients: [...clients.keys()] });
   }
 
   if (pathname === "/") pathname = "/index.html";
@@ -319,8 +351,15 @@ function serveStatic(req, res) {
     res.end(data);
   });
 }
-function json(res, obj) {
-  res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+function parseClientTarget(url) {
+  const value = url.searchParams.get("client");
+  if (value === null || value === "") return null;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : -1;
+}
+
+function json(res, obj, status = 200) {
+  res.writeHead(status, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
   res.end(JSON.stringify(obj));
 }
 

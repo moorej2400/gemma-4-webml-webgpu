@@ -73,38 +73,15 @@
       var url = (input && input.url) ? input.url : input;
       var method = (init && init.method) || (input && input.method) || "GET";
       var range = (init && init.headers && (init.headers.range || init.headers.Range)) || "";
-      var tag = range ? range.replace("bytes=", "") : "";
       send({ t: "log", seq: ++seq, level: "debug", ts: nowISO(), msg: "[fetch →] " + method + " " + shortUrl(url) + (range ? " range=" + range : "") });
       return _fetch(input, init).then(function (res) {
         var clen = res.headers.get("content-length");
         send({ t: "log", seq: ++seq, level: res.ok ? "debug" : "error", ts: nowISO(),
           msg: "[fetch ←] " + res.status + " " + (res.ok ? "OK" : res.statusText) + " " + shortUrl(url) +
                " type=" + res.type + " len=" + (clen || "?") + (clen ? " (" + humanMB(+clen) + ")" : "") });
-        // Wrap the body so we see how far the read gets and the exact error when it dies mid-stream.
-        // Pure passthrough — enqueues each chunk unchanged. Only for real streamable bodies.
-        if (!res.body || !res.body.getReader) return res;
-        var total = +clen || 0, read = 0, lastLog = 0;
-        var reader = res.body.getReader();
-        var stream = new ReadableStream({
-          pull: function (controller) {
-            return reader.read().then(function (r) {
-              if (r.done) {
-                send({ t: "log", seq: ++seq, level: "debug", ts: nowISO(), msg: "[body ✓] " + tag + " read=" + humanMB(read) + "/" + humanMB(total) });
-                controller.close(); return;
-              }
-              read += r.value.byteLength;
-              if (read - lastLog > 209715200) { lastLog = read; send({ t: "log", seq: ++seq, level: "debug", ts: nowISO(), msg: "[body …] " + tag + " " + humanMB(read) + "/" + humanMB(total) }); }
-              controller.enqueue(r.value);
-            }).catch(function (err) {
-              send({ t: "log", seq: ++seq, level: "error", ts: nowISO(),
-                msg: "[body ✗] range=" + tag + " FAILED after reading " + humanMB(read) + "/" + humanMB(total) + " → " + (err && err.name ? err.name + ": " : "") + (err && err.message ? err.message : err) });
-              controller.error(err);
-            });
-          },
-          cancel: function (r) { try { reader.cancel(r); } catch (e) {} },
-        });
-        try { return new Response(stream, { status: res.status, statusText: res.statusText, headers: res.headers }); }
-        catch (e) { return res; } // if reconstruction unsupported, fall back to the raw response
+        // Return Safari's exact Response so model loading keeps native
+        // backpressure and never creates a second body-buffering pipeline.
+        return res;
       }).catch(function (err) {
         send({ t: "log", seq: ++seq, level: "error", ts: nowISO(),
           msg: "[fetch ✗] " + method + " " + shortUrl(url) + " → " + (err && err.name ? err.name + ": " : "") + (err && err.message ? err.message : err) });
@@ -170,35 +147,16 @@
     send(env);
     if (!navigator.gpu) {
       send({ t: "log", seq: ++seq, level: "error", ts: nowISO(), msg: "[webgpu] navigator.gpu is UNDEFINED (no WebGPU on this context)" });
-      return;
+    } else {
+      send({ t: "log", seq: ++seq, level: "info", ts: nowISO(), msg: "[webgpu] available; adapter details deferred until model ownership" });
     }
-    navigator.gpu.requestAdapter({ powerPreference: "high-performance" }).then(function (adapter) {
-      if (!adapter) {
-        send({ t: "log", seq: ++seq, level: "error", ts: nowISO(), msg: "[webgpu] requestAdapter() returned null (no adapter)" });
-        return;
-      }
-      var info = {};
-      try { info = adapter.info || {}; } catch (e) {}
-      var limits = {};
-      try {
-        var L = adapter.limits;
-        ["maxBufferSize", "maxStorageBufferBindingSize", "maxComputeWorkgroupStorageSize",
-         "maxComputeInvocationsPerWorkgroup", "maxStorageBuffersPerShaderStage",
-         "maxComputeWorkgroupSizeX", "maxUniformBufferBindingSize", "maxBindGroups"].forEach(function (k) {
-          if (L && L[k] !== undefined) limits[k] = L[k];
-        });
-      } catch (e) {}
-      var features = [];
-      try { adapter.features.forEach(function (f) { features.push(f); }); } catch (e) {}
-      send({ t: "gpu", ts: nowISO(),
-        vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description,
-        isFallbackAdapter: adapter.isFallbackAdapter,
-        hasShaderF16: features.indexOf("shader-f16") !== -1,
-        features: features, limits: limits });
-    }).catch(function (e) {
-      send({ t: "log", seq: ++seq, level: "error", ts: nowISO(), msg: "[webgpu] requestAdapter threw: " + (e && e.stack ? e.stack : e) });
-    });
   }
+
+  window.addEventListener("webml-debug-event", function (event) {
+    var detail = event.detail || {};
+    var payload = detail.payload || {};
+    send(Object.assign({ t: detail.type || "app-event", ts: nowISO() }, payload));
+  });
 
   // ---- connect (with auto-reconnect) ----
   function connect() {
@@ -213,10 +171,13 @@
       var cmd;
       try { cmd = JSON.parse(ev.data); } catch (e) { return; }
       if (cmd && cmd.cmd === "reload") { location.reload(); }
-      if (cmd && cmd.cmd === "eval" && typeof cmd.code === "string") {
-        // Server-driven inspection during debugging. Result is logged back over the same channel.
-        try { var r = eval(cmd.code); console.log("[eval]", cmd.code, "=>", r); }
-        catch (e) { console.error("[eval error]", cmd.code, e && e.stack ? e.stack : e); }
+      if (cmd && ["load-model", "dispose-model", "run-prompt"].indexOf(cmd.cmd) !== -1) {
+        window.dispatchEvent(new CustomEvent("webml-debug-command", { detail: {
+          command: cmd.cmd,
+          requestId: cmd.requestId,
+          prompt: cmd.prompt,
+          maxNewTokens: cmd.maxNewTokens,
+        } }));
       }
     };
     ws.onclose = function () { connected = false; setTimeout(connect, 1500); };
