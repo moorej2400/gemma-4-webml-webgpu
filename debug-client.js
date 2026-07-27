@@ -186,6 +186,14 @@
 
   connect();
   // Report page lifecycle so the server can tell when the phone navigated away / backgrounded.
-  window.addEventListener("pagehide", function () { send({ t: "log", level: "info", ts: nowISO(), msg: "[lifecycle] pagehide" }); flush(); });
+  window.addEventListener("pagehide", function (event) {
+    send({
+      t: "log",
+      level: "info",
+      ts: nowISO(),
+      msg: "[lifecycle] pagehide persisted=" + Boolean(event.persisted),
+    });
+    flush();
+  });
   console.log("[debug-client] attached. streaming to " + WS_URL);
 })();

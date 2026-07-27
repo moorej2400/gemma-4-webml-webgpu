@@ -1,5 +1,6 @@
 import { ModelLifecycle } from "./model-lifecycle.mjs";
 import { ModelSession, UnsupportedModelSessionError } from "./model-session.mjs";
+import { installPageLifecycle } from "./page-lifecycle.mjs";
 import { getLoaderProfile } from "./platform-profile.mjs";
 
 // Streamed markdown → HTML via `marked`, loaded lazily. Falls back to a tiny inline renderer until
@@ -61,6 +62,12 @@ const modelLifecycle = new ModelLifecycle({
   importRuntime: () => import("./gemma-4-e2b.pretty.js"),
   onStateChange(state) {
     if (state === "warming") setStatus("loading", "Warming up kernels…");
+  },
+});
+installPageLifecycle({
+  dispose() {
+    abortController?.abort();
+    return modelLifecycle.dispose();
   },
 });
 
