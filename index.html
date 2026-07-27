@@ -60,6 +60,7 @@
   .hbtn:disabled { opacity: 0.4; cursor: default; }
   .hbtn.primary { color: #0a0a0c; background: var(--accent); border-color: transparent; }
   .hbtn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--accent); }
+  .hbtn svg { width: 16px; height: 16px; }
 
   /* ---------- Status / progress bar ---------- */
   #statusbar {
@@ -142,6 +143,9 @@
       <span class="sub">· WebGPU · on-device</span>
     </div>
     <span class="spacer"></span>
+    <button id="unloadBtn" class="hbtn hidden" title="Unload model" aria-label="Unload model">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>
+    </button>
     <button id="newBtn" class="hbtn" disabled>＋ New session</button>
     <button id="loadBtn" class="hbtn primary">Load model</button>
   </header>

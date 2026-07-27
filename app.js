@@ -1,6 +1,6 @@
-// Patched (de-minified) bundle: streams the 1.12GB per-layer embedding into two row-tiled
-// GPU buffers so iOS Safari's ~1GB JS-heap and GPU-buffer limits are never exceeded.
-import { Gemma4Mobile } from "./gemma-4-e2b.pretty.js";
+import { ModelLifecycle } from "./model-lifecycle.mjs";
+import { ModelSession, UnsupportedModelSessionError } from "./model-session.mjs";
+import { getLoaderProfile } from "./platform-profile.mjs";
 
 // Streamed markdown → HTML via `marked`, loaded lazily. Falls back to a tiny inline renderer until
 // (or if) it loads, so chat never hard-depends on the CDN.
@@ -11,7 +11,7 @@ import("https://esm.sh/marked@17")
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  newBtn: $("newBtn"), loadBtn: $("loadBtn"),
+  newBtn: $("newBtn"), loadBtn: $("loadBtn"), unloadBtn: $("unloadBtn"),
   statusbar: $("statusbar"), status: $("status"), statusText: $("statusText"),
   bar: $("bar"), scroll: $("scroll"), thread: $("thread"),
   input: $("input"), sendBtn: $("sendBtn"), stopBtn: $("stopBtn"), liveStat: $("liveStat"),
@@ -23,6 +23,8 @@ let messages = [];
 let abortController = null;
 let isGenerating = false;
 let isLoading = false;
+let generationPromise = null;
+let disposalPromise = null;
 
 // ---- progress bar easing (coalesce bursty byte events into one write/frame, never dip) ----
 let targetProgress = 0, shownProgress = 0, progressRaf = 0;
@@ -52,18 +54,33 @@ function setStatus(state, text) {
   if (text !== undefined) els.statusText.innerHTML = text;
 }
 
+const modelSession = new ModelSession();
+const modelLifecycle = new ModelLifecycle({
+  session: modelSession,
+  loaderProfile: getLoaderProfile(),
+  importRuntime: () => import("./gemma-4-e2b.pretty.js"),
+  onStateChange(state) {
+    if (state === "warming") setStatus("loading", "Warming up kernels…");
+  },
+});
+
 // ---- boot ----
 if (!navigator.gpu) {
   els.loadBtn.disabled = true;
   setStatus("error", "WebGPU unavailable here. On iOS this usually means the page isn’t a <strong>secure context</strong> — it must be served over HTTPS (or localhost).");
   console.error("[app] navigator.gpu is undefined — no WebGPU. secureContext:", window.isSecureContext, "proto:", location.protocol);
+} else if (!navigator.locks?.request) {
+  els.loadBtn.disabled = true;
+  setStatus("error", "This browser cannot safely own the model because Web Locks are unavailable.");
+  console.error("[app] Web Locks unavailable; refusing to risk a duplicate model load.");
 } else {
   console.log("[app] navigator.gpu present. secureContext:", window.isSecureContext);
 }
 
 els.loadBtn.addEventListener("click", loadModel);
+els.unloadBtn.addEventListener("click", disposeModel);
 els.newBtn.addEventListener("click", newSession);
-els.sendBtn.addEventListener("click", send);
+els.sendBtn.addEventListener("click", () => send());
 els.stopBtn.addEventListener("click", () => abortController?.abort());
 els.input.addEventListener("input", () => { autoGrow(); refreshSend(); });
 els.input.addEventListener("keydown", (e) => {
@@ -74,15 +91,9 @@ els.thread.addEventListener("click", (e) => {
   if (!seed || seed.disabled || !model || isGenerating) return;
   els.input.value = seed.textContent; send();
 });
+window.addEventListener("webml-debug-command", handleDebugCommand);
 
 renderWelcome();
-
-// DEBUG: auto-start the load as soon as the page opens, so on-device testing needs no tap
-// (you can't both tap in Safari and read the desktop). Remove once iOS load is working.
-if (navigator.gpu) {
-  console.log("[app] auto-loading model (debug)…");
-  setTimeout(loadModel, 400);
-}
 
 async function loadModel() {
   if (model || isLoading) return;
@@ -95,18 +106,17 @@ async function loadModel() {
 
   const started = performance.now();
   try {
-    console.log("[app] Gemma4Mobile.load() starting…");
-    // iOS Safari jettisons the tab under transient JS-heap pressure; keep fewer, smaller
-    // chunks in flight there (2×64MB) than the desktop default (4×128MB).
-    const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
-    model = await Gemma4Mobile.load(null, {
-      onProgress: onLoadProgress,
-      ...(isIOS ? { concurrency: 2, chunkMaxBytes: 64 * 1024 * 1024 } : {}),
-    });
-    window.__model = model; // debug handle for the remote-eval channel
-    console.log("[app] weights loaded, warming up kernels…");
-    setStatus("loading", "Warming up kernels…");
-    await model.warmup();
+    console.log("[app] requesting exclusive model ownership…");
+    const result = await modelLifecycle.load({ onProgress: onLoadProgress });
+    if (result.status === "blocked") {
+      console.warn("[app] Model active in another tab.");
+      setStatus("error", "Model active in another tab. Unload it there before loading here.");
+      els.loadBtn.disabled = false;
+      els.loadBtn.textContent = "Try again";
+      isLoading = false;
+      return;
+    }
+    model = result.model;
 
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
     console.log(`[app] model ready in ${seconds}s`);
@@ -114,12 +124,17 @@ async function loadModel() {
     setProgressImmediate(1);
     els.bar.classList.add("done");
     els.loadBtn.classList.add("hidden");
+    els.unloadBtn.classList.remove("hidden");
+    reportDebugEvent("gpu", model.deviceInfo());
     enableChat();
     // Collapse the status bar shortly after ready so the thread gets the space.
     setTimeout(() => { if (!isGenerating && model) els.statusbar.classList.remove("show"); }, 2500);
   } catch (error) {
     console.error("[app] load failed:", error?.stack || error?.message || error);
-    setStatus("error", `Failed to load: ${escapeHtml(String(error?.message ?? error))}`);
+    const message = error instanceof UnsupportedModelSessionError
+      ? "This browser cannot safely own the model because Web Locks are unavailable."
+      : `Failed to load: ${escapeHtml(String(error?.message ?? error))}`;
+    setStatus("error", message);
     els.bar.classList.add("done");
     els.loadBtn.disabled = false;
     els.loadBtn.textContent = "Retry load";
@@ -171,7 +186,46 @@ function enableChat() {
   els.input.focus();
 }
 
-async function send() {
+async function disposeModel() {
+  if (disposalPromise) return disposalPromise;
+  disposalPromise = (async () => {
+    els.unloadBtn.disabled = true;
+    abortController?.abort();
+    if (generationPromise) await generationPromise.catch(() => {});
+    await modelLifecycle.dispose();
+
+    model = null;
+    messages = [];
+    isLoading = false;
+    els.input.value = "";
+    els.input.disabled = true;
+    els.input.placeholder = "Load the model to start chatting…";
+    els.newBtn.disabled = true;
+    els.loadBtn.disabled = false;
+    els.loadBtn.textContent = "Load model";
+    els.loadBtn.classList.remove("hidden");
+    els.unloadBtn.classList.add("hidden");
+    els.unloadBtn.disabled = false;
+    setProgressImmediate(0);
+    els.bar.classList.remove("done");
+    setStatus("", "Model unloaded.");
+    renderWelcome();
+    console.log("[app] model disposed; ownership released.");
+  })().finally(() => {
+    disposalPromise = null;
+  });
+  return disposalPromise;
+}
+
+function send(options = {}) {
+  if (generationPromise) return generationPromise;
+  generationPromise = generateMessage(options).finally(() => {
+    generationPromise = null;
+  });
+  return generationPromise;
+}
+
+async function generateMessage({ maxNewTokens = 4096 } = {}) {
   const text = els.input.value.trim();
   if (!text || !model || isGenerating) return;
 
@@ -189,7 +243,7 @@ async function send() {
 
   let reply = "", startedAt = 0, firstTokenAt = 0, endedAt = 0, tokens = 0;
   try {
-    const stream = model.generate(messages, { maxNewTokens: 4096, signal: abortController.signal });
+    const stream = model.generate(messages, { maxNewTokens, signal: abortController.signal });
     startedAt = performance.now();
     for await (const { text: full } of stream) {
       const now = performance.now();
@@ -219,6 +273,7 @@ function setGenerating(on) {
   isGenerating = on;
   els.input.disabled = on;
   els.newBtn.disabled = on;
+  els.unloadBtn.disabled = on;
   els.sendBtn.classList.toggle("hidden", on);
   els.stopBtn.classList.toggle("hidden", !on);
   if (on) setStatus("busy", "Generating…");
@@ -239,6 +294,49 @@ function newSession() {
   renderWelcome();
   setSeedsEnabled(Boolean(model));
   els.input.focus();
+}
+
+async function handleDebugCommand(event) {
+  const detail = event.detail ?? {};
+  const command = detail.command;
+  try {
+    if (command === "load-model") {
+      await loadModel();
+    } else if (command === "dispose-model") {
+      await disposeModel();
+    } else if (command === "run-prompt") {
+      if (!model) throw new Error("Model is not ready");
+      const prompt = String(detail.prompt ?? "").trim();
+      if (!prompt) throw new Error("Prompt is required");
+      const maxNewTokens = clamp(Number(detail.maxNewTokens) || 64, 1, 512);
+      newSession();
+      els.input.value = prompt;
+      await send({ maxNewTokens });
+    } else {
+      return;
+    }
+    reportDebugEvent("command-result", {
+      requestId: detail.requestId,
+      command,
+      ok: true,
+      state: modelLifecycle.state,
+    });
+  } catch (error) {
+    reportDebugEvent("command-result", {
+      requestId: detail.requestId,
+      command,
+      ok: false,
+      state: modelLifecycle.state,
+      error: String(error?.message ?? error),
+    });
+    console.error(`[app] debug command ${command} failed:`, error);
+  }
+}
+
+function reportDebugEvent(type, payload) {
+  window.dispatchEvent(new CustomEvent("webml-debug-event", {
+    detail: { type, payload },
+  }));
 }
 
 // ---- DOM builders ----
