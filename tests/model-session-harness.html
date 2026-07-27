@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Model session harness</title>
+<script type="module">
+  import { ModelSession } from "../model-session.mjs";
+
+  window.lifecycleEvents = [];
+  window.addEventListener("pagehide", (event) => {
+    window.lifecycleEvents.push({ type: "pagehide", persisted: event.persisted });
+  });
+  window.addEventListener("pageshow", (event) => {
+    window.lifecycleEvents.push({ type: "pageshow", persisted: event.persisted });
+  });
+
+  window.modelSession = new ModelSession();
+  window.acquireModel = () => window.modelSession.acquire();
+  window.releaseModel = () => window.modelSession.release(async () => {});
+  window.sessionState = () => window.modelSession.state;
+  window.harnessReady = true;
+</script>
