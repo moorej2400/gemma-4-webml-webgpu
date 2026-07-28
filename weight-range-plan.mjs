@@ -1,5 +1,26 @@
 const DEFAULT_SPLIT_THRESHOLD = 192 * 1024 * 1024;
 const DEFAULT_CHUNK_BYTES = 128 * 1024 * 1024;
+const NETWORK_RETRY_DELAYS_MS = [250, 500];
+
+function isTransientBrowserNetworkError(error) {
+  return error?.name === "TypeError"
+    && /^(failed to fetch|load failed|network error|networkerror when attempting to fetch resource\.?)$/iu
+      .test(String(error.message).trim());
+}
+
+async function runRangeWorker(worker, item, index) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await worker(item, index);
+    } catch (error) {
+      const delayMs = NETWORK_RETRY_DELAYS_MS[attempt];
+      if (delayMs == null || !isTransientBrowserNetworkError(error)) throw error;
+      // Fetch streams can fail after a successful 206; retry this bounded chunk
+      // instead of discarding the rest of the 2.46 GB cached model download.
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
 
 /**
  * Plans safetensors byte spans without changing tensor order or layout.
@@ -99,7 +120,7 @@ export async function runWithConcurrency(items, concurrency, worker) {
     for (;;) {
       const index = nextIndex++;
       if (index >= items.length) return;
-      await worker(items[index], index);
+      await runRangeWorker(worker, items[index], index);
     }
   };
 

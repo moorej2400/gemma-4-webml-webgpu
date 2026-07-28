@@ -85,3 +85,29 @@ test("iOS worker profile allows only one active range", async () => {
 
   assert.equal(maximumActive, 1);
 });
+
+test("range workers recover from transient browser network errors", async () => {
+  let attempts = 0;
+
+  await runWithConcurrency(["weights"], 1, async () => {
+    attempts += 1;
+    if (attempts < 3) throw new TypeError("network error");
+  });
+
+  assert.equal(attempts, 3);
+});
+
+test("range workers do not retry non-network failures", async () => {
+  let attempts = 0;
+  const failure = new Error("GPU buffer allocation failed");
+
+  await assert.rejects(
+    runWithConcurrency(["weights"], 1, async () => {
+      attempts += 1;
+      throw failure;
+    }),
+    failure,
+  );
+
+  assert.equal(attempts, 1);
+});
