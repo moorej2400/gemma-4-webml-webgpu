@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   symlink,
   writeFile,
@@ -62,8 +63,13 @@ function runBuild(output) {
   });
 }
 
+async function createTemp(prefix) {
+  // macOS exposes tmpdir() through /var, a symlink to /private/var.
+  return realpath(await mkdtemp(path.join(tmpdir(), prefix)));
+}
+
 async function createSyntheticSource({ symlinkFile, symlinkParent } = {}) {
-  const temp = await mkdtemp(path.join(tmpdir(), "gemma-pages-source-"));
+  const temp = await createTemp("gemma-pages-source-");
   const source = path.join(temp, "project");
   await mkdir(path.join(source, "scripts"), { recursive: true });
   await copyFile(buildScript, path.join(source, "scripts/build-pages.mjs"));
@@ -100,7 +106,7 @@ async function createSyntheticSource({ symlinkFile, symlinkParent } = {}) {
 }
 
 test("Pages build contains exactly the reviewed public allowlist", async () => {
-  const temp = await mkdtemp(path.join(tmpdir(), "gemma-pages-"));
+  const temp = await createTemp("gemma-pages-");
   const output = path.join(temp, "site");
 
   const result = runBuild(output);
@@ -118,7 +124,7 @@ test("Pages build contains exactly the reviewed public allowlist", async () => {
 });
 
 test("Pages build excludes runtime bundles and private development artifacts", async () => {
-  const temp = await mkdtemp(path.join(tmpdir(), "gemma-pages-private-"));
+  const temp = await createTemp("gemma-pages-private-");
   const output = path.join(temp, "site");
 
   const result = runBuild(output);
@@ -130,7 +136,7 @@ test("Pages build excludes runtime bundles and private development artifacts", a
 });
 
 test("Pages build refuses a nonempty output without modifying it", async () => {
-  const temp = await mkdtemp(path.join(tmpdir(), "gemma-pages-nonempty-"));
+  const temp = await createTemp("gemma-pages-nonempty-");
   const output = path.join(temp, "site");
   const sentinel = path.join(output, "keep.txt");
   await mkdir(output);
@@ -142,6 +148,35 @@ test("Pages build refuses a nonempty output without modifying it", async () => {
   assert.match(result.stderr, /output.*empty/i);
   assert.equal(await readFile(sentinel, "utf8"), "preserve me");
   assert.deepEqual(await listFiles(output), ["keep.txt"]);
+});
+
+test("Pages build rejects a symlinked output directory", async () => {
+  const temp = await createTemp("gemma-pages-output-link-");
+  const target = path.join(temp, "target");
+  const output = path.join(temp, "site");
+  await mkdir(target);
+  await symlink(target, output, "dir");
+
+  const result = runBuild(output);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /output.*symlink/i);
+  assert.deepEqual(await readdir(target), []);
+});
+
+test("Pages build rejects an existing parent-directory symlink", async () => {
+  const temp = await createTemp("gemma-pages-output-parent-link-");
+  const target = path.join(temp, "target");
+  const linkedParent = path.join(temp, "linked-parent");
+  const output = path.join(linkedParent, "site");
+  await mkdir(target);
+  await symlink(target, linkedParent, "dir");
+
+  const result = runBuild(output);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /output.*parent.*symlink/i);
+  assert.deepEqual(await readdir(target), []);
 });
 
 test("Pages build requires an explicit output path", () => {

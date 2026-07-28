@@ -3,8 +3,8 @@ import {
   copyFile,
   lstat,
   mkdir,
+  realpath,
   readdir,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -45,15 +45,45 @@ function parseOutput(argv) {
   return path.resolve(argv[1]);
 }
 
-async function ensureEmptyOutput(output) {
-  try {
-    const outputStat = await stat(output);
-    if (!outputStat.isDirectory() || (await readdir(output)).length !== 0) {
-      throw new Error(`Pages output must be an absent or empty directory: ${output}`);
+async function ensureSafeEmptyOutput(output) {
+  const filesystemRoot = path.parse(output).root;
+  const components = path.relative(filesystemRoot, output)
+    .split(path.sep)
+    .filter(Boolean);
+  let current = filesystemRoot;
+
+  for (let index = 0; index <= components.length; index += 1) {
+    if (index > 0) current = path.join(current, components[index - 1]);
+    let outputStats;
+    try {
+      outputStats = await lstat(current);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      try {
+        await mkdir(current);
+      } catch (mkdirError) {
+        if (mkdirError.code !== "EEXIST") throw mkdirError;
+      }
+      outputStats = await lstat(current);
     }
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-    await mkdir(output, { recursive: true });
+
+    const isOutput = index === components.length;
+    const label = isOutput ? "output directory" : "output parent";
+    if (outputStats.isSymbolicLink() || !outputStats.isDirectory()) {
+      throw new Error(
+        `Pages ${label} must be a real directory, not a symlink: ${current}`,
+      );
+    }
+  }
+
+  const canonicalOutput = await realpath(output);
+  if (canonicalOutput !== output) {
+    throw new Error(
+      `Pages output resolved outside its intended path: ${output} -> ${canonicalOutput}`,
+    );
+  }
+  if ((await readdir(output)).length !== 0) {
+    throw new Error(`Pages output must be an absent or empty directory: ${output}`);
   }
 }
 
@@ -117,7 +147,8 @@ async function assertRealSourceFile(relative) {
 
 async function main() {
   const output = parseOutput(process.argv.slice(2));
-  await ensureEmptyOutput(output);
+  // Create one component at a time so recursive mkdir cannot traverse an output-side symlink.
+  await ensureSafeEmptyOutput(output);
   // The public redistribution boundary is the allowlist above, never the repository tree.
   assertReviewedFiles(artifactFiles);
 
