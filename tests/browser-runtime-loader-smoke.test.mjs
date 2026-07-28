@@ -108,21 +108,13 @@ test("verified runtime Blob imports in Chromium and WebKit", async (t) => {
       "Chromium",
       "chromium",
       chromium,
-      {
-        headless: true,
-        executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-      },
+      { headless: true },
     ],
     [
       "WebKit",
       "webkit",
       webkit,
-      {
-        headless: true,
-        ...(process.env.WEBKIT_EXECUTABLE_PATH
-          ? { executablePath: process.env.WEBKIT_EXECUTABLE_PATH }
-          : {}),
-      },
+      { headless: true },
     ],
   ].filter(([, id]) => !requestedEngine || id === requestedEngine);
   assert.notEqual(engines.length, 0, `Unknown BROWSER_ENGINE: ${requestedEngine}`);

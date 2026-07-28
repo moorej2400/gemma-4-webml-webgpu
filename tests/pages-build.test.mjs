@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -58,6 +60,43 @@ function runBuild(output) {
     cwd: root,
     encoding: "utf8",
   });
+}
+
+async function createSyntheticSource({ symlinkFile, symlinkParent } = {}) {
+  const temp = await mkdtemp(path.join(tmpdir(), "gemma-pages-source-"));
+  const source = path.join(temp, "project");
+  await mkdir(path.join(source, "scripts"), { recursive: true });
+  await copyFile(buildScript, path.join(source, "scripts/build-pages.mjs"));
+
+  for (const relative of expectedFiles.filter((file) => file !== ".nojekyll")) {
+    if (relative === symlinkFile || relative.startsWith(`${symlinkParent}/`)) continue;
+    const destination = path.join(source, relative);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, `fixture for ${relative}`);
+  }
+
+  if (symlinkFile) {
+    const target = path.join(temp, "linked-file");
+    await writeFile(target, "outside allowlisted source root");
+    await symlink(target, path.join(source, symlinkFile), "file");
+  }
+  if (symlinkParent) {
+    const target = path.join(temp, "linked-directory");
+    await mkdir(target);
+    for (const relative of expectedFiles.filter(
+      (file) => file.startsWith(`${symlinkParent}/`),
+    )) {
+      const destination = path.join(target, path.relative(symlinkParent, relative));
+      await mkdir(path.dirname(destination), { recursive: true });
+      await writeFile(destination, `outside fixture for ${relative}`);
+    }
+    await symlink(target, path.join(source, symlinkParent), "dir");
+  }
+
+  return {
+    output: path.join(temp, "site"),
+    script: path.join(source, "scripts/build-pages.mjs"),
+  };
 }
 
 test("Pages build contains exactly the reviewed public allowlist", async () => {
@@ -115,6 +154,32 @@ test("Pages build requires an explicit output path", () => {
   assert.match(result.stderr, /--output/);
 });
 
+test("Pages build rejects an allowlisted final-file symlink", async () => {
+  const fixture = await createSyntheticSource({ symlinkFile: "README.md" });
+
+  const result = spawnSync(process.execPath, [
+    fixture.script,
+    "--output",
+    fixture.output,
+  ], { encoding: "utf8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /README\.md.*regular file.*symlink/i);
+});
+
+test("Pages build rejects an allowlisted parent-directory symlink", async () => {
+  const fixture = await createSyntheticSource({ symlinkParent: "patches" });
+
+  const result = spawnSync(process.execPath, [
+    fixture.script,
+    "--output",
+    fixture.output,
+  ], { encoding: "utf8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /patches.*directory.*symlink/i);
+});
+
 test("deployment workflow uses least privilege and the reviewed Pages pipeline", async () => {
   const workflow = await readFile(
     path.join(root, ".github/workflows/deploy-pages.yml"),
@@ -129,28 +194,60 @@ test("deployment workflow uses least privilege and the reviewed Pages pipeline",
   assert.match(workflow, /^\s+group: pages$/m);
   assert.match(workflow, /^\s+cancel-in-progress: false$/m);
   assert.doesNotMatch(workflow, /concurrency:[\s\S]*?github\.ref/);
-  assert.match(workflow, /uses: actions\/checkout@v6/);
-  assert.match(workflow, /uses: actions\/setup-node@v6/);
-  assert.match(workflow, /node-version: ['"]24\.x['"]/);
+  assert.equal((workflow.match(/runs-on: ubuntu-24\.04/g) ?? []).length, 2);
+  assert.match(
+    workflow,
+    /uses: actions\/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6/,
+  );
+  assert.match(
+    workflow,
+    /uses: actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4/,
+  );
+  assert.match(workflow, /node-version: ['"]24\.14\.0['"]/);
   assert.match(workflow, /run: npm ci/);
   assert.match(workflow, /run: npm run prepare-runtime/);
+  assert.match(workflow, /run: npx playwright install --with-deps chromium webkit/);
   assert.match(workflow, /run: npm test/);
   assert.match(workflow, /run: npm run build:pages -- --output _site/);
-  assert.match(workflow, /uses: actions\/configure-pages@v5/);
-  assert.match(workflow, /uses: actions\/upload-pages-artifact@v4/);
+  assert.ok(
+    workflow.indexOf("npx playwright install --with-deps chromium webkit")
+      < workflow.indexOf("run: npm test"),
+  );
+  assert.ok(
+    workflow.indexOf("run: npm test")
+      < workflow.indexOf("run: npm run build:pages -- --output _site"),
+  );
+  assert.ok(
+    workflow.indexOf("run: npm run build:pages -- --output _site")
+      < workflow.indexOf("actions/upload-pages-artifact@"),
+  );
+  assert.match(
+    workflow,
+    /uses: actions\/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5/,
+  );
+  assert.match(
+    workflow,
+    /uses: actions\/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4/,
+  );
   assert.match(workflow, /path: _site/);
   assert.match(workflow, /deploy:\s*\n\s+needs: build/);
   assert.match(workflow, /pages: write/);
   assert.match(workflow, /id-token: write/);
   assert.match(workflow, /name: github-pages/);
   assert.match(workflow, /url: \$\{\{ steps\.deployment\.outputs\.page_url \}\}/);
-  assert.match(workflow, /uses: actions\/deploy-pages@v4/);
+  assert.match(
+    workflow,
+    /uses: actions\/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4/,
+  );
+  assert.doesNotMatch(workflow, /uses:\s+\S+@v\d/);
   assert.doesNotMatch(workflow, /path:.*gemma-4-e2b|cp .*gemma-4-e2b/);
 });
 
 test("package scripts and public documentation expose the Pages contract", async () => {
-  const [packageJson, readme, notices, gitignore] = await Promise.all([
+  const [packageJson, packageLock, smokeTest, readme, notices, gitignore] = await Promise.all([
     readFile(path.join(root, "package.json"), "utf8").then(JSON.parse),
+    readFile(path.join(root, "package-lock.json"), "utf8").then(JSON.parse),
+    readFile(path.join(root, "tests/browser-runtime-loader-smoke.test.mjs"), "utf8"),
     readFile(path.join(root, "README.md"), "utf8"),
     readFile(path.join(root, "THIRD_PARTY_NOTICES.md"), "utf8"),
     readFile(path.join(root, ".gitignore"), "utf8"),
@@ -158,6 +255,11 @@ test("package scripts and public documentation expose the Pages contract", async
 
   assert.equal(packageJson.scripts["build:pages"], "node scripts/build-pages.mjs");
   assert.match(packageJson.scripts.test, /tests\/pages-build\.test\.mjs/);
+  assert.match(packageJson.scripts.test, /tests\/browser-runtime-loader-smoke\.test\.mjs/);
+  assert.equal(packageJson.devDependencies.playwright, "1.61.1");
+  assert.equal(packageLock.packages[""].devDependencies.playwright, "1.61.1");
+  assert.equal(packageLock.packages["node_modules/playwright"].version, "1.61.1");
+  assert.doesNotMatch(smokeTest, /executablePath|Google Chrome\.app|WEBKIT_EXECUTABLE_PATH/);
   assert.match(readme, new RegExp(publicUrl.replaceAll(".", "\\.")));
   assert.match(readme, /WebGPU/i);
   assert.match(readme, /sufficient|available memory/i);

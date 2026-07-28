@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import {
   copyFile,
+  lstat,
   mkdir,
   readdir,
   stat,
@@ -89,6 +90,31 @@ function assertReviewedFiles(files) {
   }
 }
 
+async function assertRealSourceFile(relative) {
+  const rootStats = await lstat(root);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    throw new Error(`Pages source root must be a real directory, not a symlink: ${root}`);
+  }
+
+  const components = relative.split("/");
+  let current = root;
+  for (let index = 0; index < components.length; index += 1) {
+    current = path.join(current, components[index]);
+    const sourceStats = await lstat(current);
+    const isFinal = index === components.length - 1;
+    if (!isFinal && (sourceStats.isSymbolicLink() || !sourceStats.isDirectory())) {
+      throw new Error(
+        `Pages source parent ${components.slice(0, index + 1).join("/")} must be a real directory, not a symlink`,
+      );
+    }
+    if (isFinal && (sourceStats.isSymbolicLink() || !sourceStats.isFile())) {
+      throw new Error(
+        `Pages source ${relative} must be a real regular file, not a symlink`,
+      );
+    }
+  }
+}
+
 async function main() {
   const output = parseOutput(process.argv.slice(2));
   await ensureEmptyOutput(output);
@@ -101,6 +127,8 @@ async function main() {
     if (relative === ".nojekyll") {
       await writeFile(destination, "", { flag: "wx" });
     } else {
+      // Revalidate every component at copy time; allowlisted names do not make symlink targets public.
+      await assertRealSourceFile(relative);
       await copyFile(path.join(root, relative), destination, constants.COPYFILE_EXCL);
     }
   }
