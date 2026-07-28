@@ -59,6 +59,7 @@ test("two real app pages import and load the runtime only in the lock owner", as
   const context = await browser.newContext();
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "gpu", { value: {}, configurable: true });
+    localStorage.setItem("gemma.showManualModelControls", "true");
   });
 
   let runtimeImports = 0;

@@ -90,6 +90,24 @@ test("manual unload leaves chat ready for another first-send load", async () => 
   assert.match(disposeModel, /setSeedsEnabled\(capabilitiesAvailable\)/);
 });
 
+test("manual model controls are governed by the persisted Settings preference", async () => {
+  const [app, html] = await Promise.all([
+    readFile(new URL("app.js", root), "utf8"),
+    readFile(new URL("index.html", root), "utf8"),
+  ]);
+
+  assert.match(
+    app,
+    /import \{ readManualControlsPreference, writeManualControlsPreference \} from "\.\/manual-controls-preference\.mjs";/,
+  );
+  assert.match(html, /id="manualModelControls"[^>]*class="[^"]*hidden/);
+  assert.match(html, /id="settingsBtn"[^>]*aria-label="Settings"[^>]*aria-expanded="false"[^>]*aria-controls="settingsPopover"/);
+  assert.match(html, /id="settingsPopover"[^>]*hidden/);
+  assert.match(html, /id="manualControlsToggle"[^>]*type="checkbox"[^>]*role="switch"/);
+  assert.match(app, /readManualControlsPreference\(\)/);
+  assert.match(app, /writeManualControlsPreference\(showManualControls\)/);
+});
+
 test("welcome copy explains first-message on-device loading without implementation jargon", async () => {
   const source = await readFile(new URL("app.js", root), "utf8");
 

@@ -1,5 +1,6 @@
 import { ModelLifecycle } from "./model-lifecycle.mjs";
 import { ModelSession, UnsupportedModelSessionError } from "./model-session.mjs";
+import { readManualControlsPreference, writeManualControlsPreference } from "./manual-controls-preference.mjs";
 import { installPageLifecycle } from "./page-lifecycle.mjs";
 import { getLoaderProfile } from "./platform-profile.mjs";
 import { SubmissionFlow } from "./submission-flow.mjs";
@@ -14,6 +15,8 @@ import("https://esm.sh/marked@17")
 const $ = (id) => document.getElementById(id);
 const els = {
   newBtn: $("newBtn"), loadBtn: $("loadBtn"), unloadBtn: $("unloadBtn"),
+  manualModelControls: $("manualModelControls"), settingsBtn: $("settingsBtn"),
+  settingsPopover: $("settingsPopover"), manualControlsToggle: $("manualControlsToggle"),
   statusbar: $("statusbar"), status: $("status"), statusText: $("statusText"),
   bar: $("bar"), scroll: $("scroll"), thread: $("thread"),
   input: $("input"), sendBtn: $("sendBtn"), stopBtn: $("stopBtn"), liveStat: $("liveStat"),
@@ -97,9 +100,16 @@ if (!navigator.gpu) {
   console.log("[app] navigator.gpu present. secureContext:", window.isSecureContext);
 }
 
+setManualControlsVisible(readManualControlsPreference());
 els.loadBtn.addEventListener("click", loadModel);
 els.unloadBtn.addEventListener("click", disposeModel);
 els.newBtn.addEventListener("click", newSession);
+els.settingsBtn.addEventListener("click", () => setSettingsOpen(els.settingsPopover.hidden));
+els.manualControlsToggle.addEventListener("change", () => {
+  const showManualControls = els.manualControlsToggle.checked;
+  setManualControlsVisible(showManualControls);
+  writeManualControlsPreference(showManualControls);
+});
 els.sendBtn.addEventListener("click", () => send());
 els.stopBtn.addEventListener("click", () => abortController?.abort());
 els.input.addEventListener("input", () => { autoGrow(); refreshSend(); });
@@ -115,10 +125,32 @@ els.thread.addEventListener("click", (e) => {
   send();
 });
 window.addEventListener("webml-debug-command", handleDebugCommand);
+document.addEventListener("pointerdown", (event) => {
+  if (!els.settingsPopover.hidden && !event.target.closest(".settings-surface")) {
+    setSettingsOpen(false);
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !els.settingsPopover.hidden) {
+    setSettingsOpen(false);
+    els.settingsBtn.focus();
+  }
+});
 
 renderWelcome();
 els.input.disabled = !capabilitiesAvailable;
 refreshSend();
+
+// This preference changes discoverability only; model ownership and runtime state stay untouched.
+function setManualControlsVisible(show) {
+  els.manualControlsToggle.checked = show;
+  els.manualModelControls.classList.toggle("hidden", !show);
+}
+
+function setSettingsOpen(open) {
+  els.settingsPopover.hidden = !open;
+  els.settingsBtn.setAttribute("aria-expanded", String(open));
+}
 
 async function loadModel() {
   if (!capabilitiesAvailable || model || isLoading) return;
