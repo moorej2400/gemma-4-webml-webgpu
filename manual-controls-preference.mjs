@@ -1,8 +1,13 @@
 const KEY = "gemma.showManualModelControls";
 
-export function readManualControlsPreference(storage = globalThis.localStorage) {
+function resolveStorage(storage) {
+  // Opaque origins can throw SecurityError while reading the global getter itself.
+  return storage === undefined ? globalThis.localStorage : storage;
+}
+
+export function readManualControlsPreference(storage = undefined) {
   try {
-    return storage?.getItem(KEY) === "true";
+    return resolveStorage(storage)?.getItem(KEY) === "true";
   } catch {
     return false;
   }
@@ -10,9 +15,9 @@ export function readManualControlsPreference(storage = globalThis.localStorage) 
 
 export function writeManualControlsPreference(
   value,
-  storage = globalThis.localStorage,
+  storage = undefined,
 ) {
   try {
-    storage?.setItem(KEY, String(Boolean(value)));
+    resolveStorage(storage)?.setItem(KEY, String(Boolean(value)));
   } catch {}
 }

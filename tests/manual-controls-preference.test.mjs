@@ -74,3 +74,27 @@ test("fails closed when storage access throws", () => {
   assert.equal(readManualControlsPreference(storage), false);
   assert.doesNotThrow(() => writeManualControlsPreference(true, storage));
 });
+
+test("fails closed when the global localStorage getter throws", () => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "localStorage",
+  );
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    get() {
+      throw new DOMException("storage denied", "SecurityError");
+    },
+  });
+
+  try {
+    assert.equal(readManualControlsPreference(), false);
+    assert.doesNotThrow(() => writeManualControlsPreference(true));
+  } finally {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", originalDescriptor);
+    } else {
+      Reflect.deleteProperty(globalThis, "localStorage");
+    }
+  }
+});
