@@ -37,6 +37,7 @@ test("two real app pages import and load the runtime only in the lock owner", as
   let sourceRequests = 0;
   let patchRequests = 0;
   let formatterRequests = 0;
+  let lexerRequests = 0;
   const sourceSha256 = createHash("sha256").update(mockRuntime).digest("hex");
   const patchedSha256 = createHash("sha256")
     .update(normalizeTrailingNewline(beautify(mockRuntime, { indent_size: 2 })))
@@ -75,6 +76,9 @@ test("two real app pages import and load the runtime only in the lock owner", as
     }
     if (pathname === "/vendor/beautifier.min.js") {
       formatterRequests += 1;
+    }
+    if (pathname === "/vendor/es-module-lexer.mjs") {
+      lexerRequests += 1;
     }
 
     const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
@@ -115,8 +119,14 @@ test("two real app pages import and load the runtime only in the lock owner", as
     second.locator("#loadBtn").waitFor(),
   ]);
   assert.deepEqual(
-    [manifestRequests, sourceRequests, patchRequests, formatterRequests],
-    [0, 0, 0, 0],
+    [
+      manifestRequests,
+      sourceRequests,
+      patchRequests,
+      formatterRequests,
+      lexerRequests,
+    ],
+    [0, 0, 0, 0, 0],
     "app boot must not start browser runtime preparation",
   );
 
@@ -136,8 +146,14 @@ test("two real app pages import and load the runtime only in the lock owner", as
   assert.equal(statuses.filter((status) => status.includes("Ready")).length, 1);
   assert.equal(statuses.filter((status) => status.includes("another tab")).length, 1);
   assert.deepEqual(
-    [manifestRequests, sourceRequests, patchRequests, formatterRequests],
-    [1, 1, 1, 1],
+    [
+      manifestRequests,
+      sourceRequests,
+      patchRequests,
+      formatterRequests,
+      lexerRequests,
+    ],
+    [1, 1, 1, 1, 1],
   );
   assert.equal(weightRequests, 1);
 

@@ -32,6 +32,12 @@ The browser loader includes the minified JavaScript formatter from
 `js-beautify` 2.0.3. It is distributed under the MIT License; see
 `vendor/LICENSE.js-beautify`.
 
+## es-module-lexer
+
+The browser loader includes `es-module-lexer` 2.3.1 to enumerate and validate
+every module dependency before Blob import. It is distributed under the MIT
+License; see `vendor/LICENSE.es-module-lexer`.
+
 ## Gemma Model
 
 The app downloads `google/gemma-4-E2B-it-qat-mobile-transformers` from Hugging Face at runtime. Model files are not included in this repository. The model page identifies its license as Apache 2.0; review the [model card](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers) for current terms and usage guidance.

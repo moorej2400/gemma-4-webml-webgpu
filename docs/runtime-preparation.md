@@ -14,8 +14,10 @@ After the app owns its exclusive Web Lock, `browser-runtime-loader.mjs`:
 3. Verifies the upstream SHA-256 before formatting.
 4. Loads the vendored browser formatter and applies the shared patch logic.
 5. Verifies the patched SHA-256.
-6. Resolves the two local adapter imports and evaluates a temporary Blob
-   module.
+6. Loads the vendored module lexer, rejects every dependency except one static
+   import of each approved adapter, and resolves those two imports to
+   same-origin URLs.
+7. Evaluates a temporary Blob module.
 
 The Blob URL is always revoked. Failed loads are not cached, so a later model
 load can retry. Neither the upstream nor patched runtime is stored in Git.

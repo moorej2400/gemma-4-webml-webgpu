@@ -15,9 +15,10 @@
 ## Model Loading
 
 The browser verifies the exact upstream runtime bytes and exact patched output
-before importing a temporary Blob module. Runtime preparation starts only
-after the page owns the model Web Lock. The runtime then downloads model
-weights, tokenizer data, and configuration from
+before a vendored module lexer permits exactly the two expected static adapter
+imports and the loader imports a temporary Blob module. Runtime preparation
+starts only after the page owns the model Web Lock. The runtime then downloads
+model weights, tokenizer data, and configuration from
 `google/gemma-4-E2B-it-qat-mobile-transformers` on Hugging Face. Large
 responses may be cached by the browser. No model weights are stored in this
 repository.

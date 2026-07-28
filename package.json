@@ -6,6 +6,7 @@
     "test": "node --test tests/app-contract.test.mjs tests/browser-runtime-loader.test.mjs tests/clean-checkout.test.mjs tests/debug-surface.test.mjs tests/disk-backed-embedding.test.mjs tests/manual-controls-preference.test.mjs tests/model-lifecycle.test.mjs tests/model-session.test.mjs tests/page-lifecycle.test.mjs tests/platform-profile.test.mjs tests/runtime-cleanup.test.mjs tests/runtime-disk-integration.test.mjs tests/runtime-patch.test.mjs tests/runtime-preparation.test.mjs tests/submission-flow.test.mjs tests/weight-range-plan.test.mjs"
   },
   "devDependencies": {
+    "es-module-lexer": "2.3.1",
     "js-beautify": "2.0.3"
   }
 }

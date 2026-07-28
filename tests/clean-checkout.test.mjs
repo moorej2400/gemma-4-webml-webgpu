@@ -33,3 +33,19 @@ test("only the licensed browser formatter is tracked under vendor", async () => 
   assert.deepEqual(beautifier, installed);
   assert.deepEqual(license, installedLicense);
 });
+
+test("vendored module lexer and MIT license match the pinned package", async () => {
+  const lexer = await readFile(new URL("../vendor/es-module-lexer.mjs", import.meta.url));
+  const installed = await readFile(
+    new URL("../node_modules/es-module-lexer/dist/lexer.js", import.meta.url),
+  );
+  const license = await readFile(
+    new URL("../vendor/LICENSE.es-module-lexer", import.meta.url),
+  );
+  const installedLicense = await readFile(
+    new URL("../node_modules/es-module-lexer/LICENSE", import.meta.url),
+  );
+
+  assert.deepEqual(lexer, installed);
+  assert.deepEqual(license, installedLicense);
+});

@@ -7,8 +7,6 @@ const EXPECTED_RELATIVE_IMPORTS = [
   "./weight-range-plan.mjs",
   "./disk-backed-embedding.mjs",
 ];
-const STATIC_IMPORT_PATTERN =
-  /(^|\n)([ \t]*import[ \t]+(?:[\s\S]*?[ \t]+from[ \t]+)?)(["'])([^"']+)\3/g;
 
 async function requireOk(response, label) {
   if (!response.ok) {
@@ -24,40 +22,58 @@ async function sha256Hex(value, cryptoImpl) {
   )).join("");
 }
 
-function resolveRuntimeImports(source, loaderUrl) {
+async function resolveRuntimeImports(source, loaderUrl, moduleLexer) {
   const expected = new Map(
     EXPECTED_RELATIVE_IMPORTS.map((specifier) => [specifier, 0]),
   );
   const loader = new URL(loaderUrl);
+  // The bundle hash authenticates bytes; the lexer closes its dependency graph
+  // before Blob evaluation can trigger any attacker-selected module request.
+  const [dependencies] = await moduleLexer.parse(source);
+  const rewrites = [];
 
-  const resolved = source.replace(
-    STATIC_IMPORT_PATTERN,
-    (statement, start, prefix, quote, specifier) => {
-      if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-        return statement;
-      }
-      if (!expected.has(specifier)) {
-        throw new Error(`Unexpected relative runtime import: ${specifier}`);
-      }
+  for (const dependency of dependencies) {
+    const parsedSpecifier = dependency.n
+      ?? source.slice(dependency.s, dependency.e);
+    const specifier = parsedSpecifier || "<dynamic expression>";
+    const statement = source.slice(dependency.ss, dependency.se);
+    const isStaticImport = dependency.d === -1
+      && dependency.t === moduleLexer.ImportType.Static
+      && /^\s*import(?:\s|["'])/u.test(statement);
+    if (!isStaticImport || !expected.has(specifier)) {
+      throw new Error(`Unexpected runtime dependency: ${specifier}`);
+    }
 
-      const count = expected.get(specifier) + 1;
-      expected.set(specifier, count);
-      if (count > 1) {
-        throw new Error(`Runtime import appears more than once: ${specifier}`);
-      }
+    const count = expected.get(specifier) + 1;
+    expected.set(specifier, count);
+    if (count > 1) {
+      throw new Error(`Runtime import appears more than once: ${specifier}`);
+    }
 
-      const absolute = new URL(specifier, loader);
-      if (absolute.origin !== loader.origin) {
-        throw new Error(`Runtime import is not same-origin: ${specifier}`);
-      }
-      return `${start}${prefix}${quote}${absolute.href}${quote}`;
-    },
-  );
+    const absolute = new URL(specifier, loader);
+    if (absolute.origin !== loader.origin) {
+      throw new Error(`Runtime import is not same-origin: ${specifier}`);
+    }
+    rewrites.push({
+      start: dependency.s,
+      end: dependency.e,
+      value: absolute.href,
+    });
+  }
 
   for (const [specifier, count] of expected) {
     if (count !== 1) {
       throw new Error(`Expected runtime import is missing: ${specifier}`);
     }
+  }
+
+  let resolved = source;
+  for (const rewrite of rewrites.sort((left, right) => right.start - left.start)) {
+    resolved = [
+      resolved.slice(0, rewrite.start),
+      rewrite.value,
+      resolved.slice(rewrite.end),
+    ].join("");
   }
   return resolved;
 }
@@ -82,6 +98,10 @@ async function loadDefaultFormatter() {
   return globalThis.beautifier.js;
 }
 
+function loadDefaultModuleLexer() {
+  return import(new URL("./vendor/es-module-lexer.mjs", import.meta.url));
+}
+
 /**
  * Creates one document-scoped verified runtime cache.
  *
@@ -99,6 +119,7 @@ export function createBrowserRuntimeLoader({ loaderUrl = import.meta.url } = {})
       fetchImpl = globalThis.fetch.bind(globalThis),
       cryptoImpl = globalThis.crypto,
       loadFormatter = loadDefaultFormatter,
+      loadModuleLexer = loadDefaultModuleLexer,
       createBlob = (parts, options) => new Blob(parts, options),
       createObjectURL = (blob) => URL.createObjectURL(blob),
       revokeObjectURL = (url) => URL.revokeObjectURL(url),
@@ -151,7 +172,12 @@ export function createBrowserRuntimeLoader({ loaderUrl = import.meta.url } = {})
         );
       }
 
-      const importable = resolveRuntimeImports(patched, loaderUrl);
+      const moduleLexer = await loadModuleLexer();
+      const importable = await resolveRuntimeImports(
+        patched,
+        loaderUrl,
+        moduleLexer,
+      );
       const blob = createBlob([importable], { type: "text/javascript" });
       const blobUrl = createObjectURL(blob);
       try {

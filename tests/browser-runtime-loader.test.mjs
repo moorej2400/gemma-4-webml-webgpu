@@ -52,6 +52,14 @@ function runtimeSource(extraImport = "") {
   ].filter(Boolean).join("\n");
 }
 
+function harnessForSource(source) {
+  return buildHarness({
+    source,
+    patched: normalized(source),
+    patchedSha256: digest(normalized(source)),
+  });
+}
+
 function buildHarness({
   source = runtimeSource(),
   patch = "",
@@ -225,15 +233,11 @@ test("rejects a missing expected adapter import", async () => {
 
 test("rejects unexpected relative static imports", async () => {
   const source = runtimeSource('import "./unexpected.mjs";');
-  const harness = buildHarness({
-    source,
-    patched: normalized(source),
-    patchedSha256: digest(normalized(source)),
-  });
+  const harness = harnessForSource(source);
 
   await assert.rejects(
     harness.load(harness.dependencies),
-    /Unexpected relative runtime import: \.\/unexpected\.mjs/,
+    /Unexpected runtime dependency: \.\/unexpected\.mjs/,
   );
 });
 
@@ -250,6 +254,46 @@ test("rejects duplicate occurrences of an expected relative import", async () =>
   await assert.rejects(
     harness.load(harness.dependencies),
     /Runtime import appears more than once: \.\/weight-range-plan\.mjs/,
+  );
+});
+
+for (const [kind, dependency] of [
+  ["bare import", 'import "untrusted-package";'],
+  ["absolute URL import", 'import "https://untrusted.example/module.mjs";'],
+]) {
+  test(`rejects an unexpected ${kind} dependency`, async () => {
+    const harness = harnessForSource(runtimeSource(dependency));
+
+    await assert.rejects(
+      harness.load(harness.dependencies),
+      /Unexpected runtime dependency:/,
+    );
+  });
+}
+
+test("rejects a re-export of an approved dependency", async () => {
+  const source = runtimeSource().replace(
+    'import { planTensorSpans } from "./weight-range-plan.mjs";',
+    'export { planTensorSpans } from "./weight-range-plan.mjs";',
+  );
+  const harness = harnessForSource(source);
+
+  await assert.rejects(
+    harness.load(harness.dependencies),
+    /Unexpected runtime dependency: \.\/weight-range-plan\.mjs/,
+  );
+});
+
+test("rejects a dynamic import of an approved dependency", async () => {
+  const source = runtimeSource().replace(
+    'import { planTensorSpans } from "./weight-range-plan.mjs";',
+    'const { planTensorSpans } = await import("./weight-range-plan.mjs");',
+  );
+  const harness = harnessForSource(source);
+
+  await assert.rejects(
+    harness.load(harness.dependencies),
+    /Unexpected runtime dependency: \.\/weight-range-plan\.mjs/,
   );
 });
 
