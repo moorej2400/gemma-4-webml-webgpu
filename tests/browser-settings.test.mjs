@@ -181,6 +181,7 @@ test("real browser Settings controls manual model control visibility", async (t)
 
   await t.test("keeps manual header controls on one row at phone widths", async () => {
     for (const viewport of [
+      { width: 320, height: 568 },
       { width: 375, height: 667 },
       { width: 440, height: 796 },
     ]) {
@@ -203,6 +204,7 @@ test("real browser Settings controls manual model control visibility", async (t)
           };
           const header = rect("header");
           const brand = rect(".brand");
+          const brandName = rect(".brand .name");
           const newSession = rect("#newBtn");
           const load = rect("#loadBtn");
           const settings = rect("#settingsBtn");
@@ -210,6 +212,8 @@ test("real browser Settings controls manual model control visibility", async (t)
             documentWidth: document.documentElement.scrollWidth,
             header,
             brand,
+            brandName,
+            brandNameVisible: getComputedStyle(document.querySelector(".brand .name")).display !== "none",
             newSession,
             load,
             settings,
@@ -225,9 +229,11 @@ test("real browser Settings controls manual model control visibility", async (t)
         assert.equal(layout.newSession.top, layout.load.top);
         assert.equal(layout.load.top, layout.settings.top);
         assert.ok(layout.brand.right <= layout.newSession.left);
+        assert.ok(!layout.brandNameVisible || layout.brandName.right <= layout.newSession.left);
         assert.ok(layout.newSession.right <= layout.load.left);
         assert.ok(layout.load.right <= layout.settings.left);
         assert.ok(layout.settings.right <= viewport.width);
+        assert.equal(await page.locator(".brand").getAttribute("aria-label"), "Gemma 4 E2B");
         assert.equal(await page.locator("#newBtn").getAttribute("title"), "New session");
         assert.equal(await page.locator("#newBtn").getAttribute("aria-label"), "New session");
       } finally {

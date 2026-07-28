@@ -116,6 +116,9 @@
     }
     #newBtn .btn-label { display: none; }
   }
+  @media (max-width: 340px) {
+    .brand .name { display: none; }
+  }
 
   /* ---------- Status / progress bar ---------- */
   #statusbar {
@@ -192,8 +195,8 @@
 </head>
 <body>
   <header>
-    <div class="brand">
-      <span class="dot">⚡️</span>
+    <div class="brand" role="img" aria-label="Gemma 4 E2B">
+      <span class="dot" aria-hidden="true">⚡️</span>
       <span class="name">Gemma 4 E2B</span>
       <span class="sub">· WebGPU · on-device</span>
     </div>
