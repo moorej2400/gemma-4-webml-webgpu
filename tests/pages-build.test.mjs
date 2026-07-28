@@ -126,8 +126,9 @@ test("deployment workflow uses least privilege and the reviewed Pages pipeline",
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /^permissions:\s*\n\s+contents: read$/m);
   assert.match(workflow, /^concurrency:\s*$/m);
-  assert.match(workflow, /group: .*\$\{\{ github\.ref \}\}/);
-  assert.match(workflow, /cancel-in-progress: true/);
+  assert.match(workflow, /^\s+group: pages$/m);
+  assert.match(workflow, /^\s+cancel-in-progress: false$/m);
+  assert.doesNotMatch(workflow, /concurrency:[\s\S]*?github\.ref/);
   assert.match(workflow, /uses: actions\/checkout@v6/);
   assert.match(workflow, /uses: actions\/setup-node@v6/);
   assert.match(workflow, /node-version: ['"]24\.x['"]/);
