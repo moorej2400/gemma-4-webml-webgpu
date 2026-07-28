@@ -237,6 +237,22 @@ test("rejects unexpected relative static imports", async () => {
   );
 });
 
+test("rejects duplicate occurrences of an expected relative import", async () => {
+  const source = runtimeSource(
+    'import { runWithConcurrency } from "./weight-range-plan.mjs";',
+  );
+  const harness = buildHarness({
+    source,
+    patched: normalized(source),
+    patchedSha256: digest(normalized(source)),
+  });
+
+  await assert.rejects(
+    harness.load(harness.dependencies),
+    /Runtime import appears more than once: \.\/weight-range-plan\.mjs/,
+  );
+});
+
 test("revokes the Blob URL after successful module evaluation", async () => {
   const harness = buildHarness();
 
