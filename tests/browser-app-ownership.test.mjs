@@ -97,10 +97,7 @@ test("two real app pages import and load the runtime only in the lock owner", as
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
 
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  });
+  const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const context = await browser.newContext();
   await context.addInitScript(() => {

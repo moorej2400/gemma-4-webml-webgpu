@@ -243,6 +243,7 @@ test("deployment workflow uses least privilege and the reviewed Pages pipeline",
   assert.match(workflow, /run: npm run prepare-runtime/);
   assert.match(workflow, /run: npx playwright install --with-deps chromium webkit/);
   assert.match(workflow, /run: npm test/);
+  assert.match(workflow, /run: npm run test:browser/);
   assert.match(workflow, /run: npm run build:pages -- --output _site/);
   assert.ok(
     workflow.indexOf("npx playwright install --with-deps chromium webkit")
@@ -250,6 +251,10 @@ test("deployment workflow uses least privilege and the reviewed Pages pipeline",
   );
   assert.ok(
     workflow.indexOf("run: npm test")
+      < workflow.indexOf("run: npm run test:browser"),
+  );
+  assert.ok(
+    workflow.indexOf("run: npm run test:browser")
       < workflow.indexOf("run: npm run build:pages -- --output _site"),
   );
   assert.ok(
@@ -279,10 +284,24 @@ test("deployment workflow uses least privilege and the reviewed Pages pipeline",
 });
 
 test("package scripts and public documentation expose the Pages contract", async () => {
-  const [packageJson, packageLock, smokeTest, readme, notices, gitignore] = await Promise.all([
+  const browserTestFiles = [
+    "tests/browser-app-ownership.test.mjs",
+    "tests/browser-chat-first.test.mjs",
+    "tests/browser-model-session.test.mjs",
+    "tests/browser-settings.test.mjs",
+    "tests/browser-runtime-loader-smoke.test.mjs",
+  ];
+  const [
+    packageJson,
+    packageLock,
+    browserTests,
+    readme,
+    notices,
+    gitignore,
+  ] = await Promise.all([
     readFile(path.join(root, "package.json"), "utf8").then(JSON.parse),
     readFile(path.join(root, "package-lock.json"), "utf8").then(JSON.parse),
-    readFile(path.join(root, "tests/browser-runtime-loader-smoke.test.mjs"), "utf8"),
+    Promise.all(browserTestFiles.map((file) => readFile(path.join(root, file), "utf8"))),
     readFile(path.join(root, "README.md"), "utf8"),
     readFile(path.join(root, "THIRD_PARTY_NOTICES.md"), "utf8"),
     readFile(path.join(root, ".gitignore"), "utf8"),
@@ -290,11 +309,21 @@ test("package scripts and public documentation expose the Pages contract", async
 
   assert.equal(packageJson.scripts["build:pages"], "node scripts/build-pages.mjs");
   assert.match(packageJson.scripts.test, /tests\/pages-build\.test\.mjs/);
-  assert.match(packageJson.scripts.test, /tests\/browser-runtime-loader-smoke\.test\.mjs/);
+  assert.match(packageJson.scripts.test, /tests\/browser-runtime-loader\.test\.mjs/);
+  assert.doesNotMatch(packageJson.scripts.test, /tests\/browser-runtime-loader-smoke\.test\.mjs/);
+  assert.equal(
+    packageJson.scripts["test:browser"],
+    `node --test ${browserTestFiles.join(" ")}`,
+  );
   assert.equal(packageJson.devDependencies.playwright, "1.61.1");
   assert.equal(packageLock.packages[""].devDependencies.playwright, "1.61.1");
   assert.equal(packageLock.packages["node_modules/playwright"].version, "1.61.1");
-  assert.doesNotMatch(smokeTest, /executablePath|Google Chrome\.app|WEBKIT_EXECUTABLE_PATH/);
+  for (const browserTest of browserTests) {
+    assert.doesNotMatch(
+      browserTest,
+      /executablePath|Google Chrome\.app|WEBKIT_EXECUTABLE_PATH/,
+    );
+  }
   assert.match(readme, new RegExp(publicUrl.replaceAll(".", "\\.")));
   assert.match(readme, /WebGPU/i);
   assert.match(readme, /sufficient|available memory/i);

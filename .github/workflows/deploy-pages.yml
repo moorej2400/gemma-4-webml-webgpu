@@ -31,6 +31,8 @@ jobs:
         run: npm run prepare-runtime
       - name: Run tests
         run: npm test
+      - name: Run browser tests
+        run: npm run test:browser
       - name: Build reviewed Pages artifact
         run: npm run build:pages -- --output _site
       - name: Configure Pages
