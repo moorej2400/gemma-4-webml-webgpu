@@ -74,6 +74,24 @@ test("shares one in-flight submission without duplicating work", async () => {
   assert.deepEqual(generated, ["original"]);
 });
 
+test("carries the original submission context through to generation", async () => {
+  const generated = [];
+  const context = { maxNewTokens: 96 };
+  const flow = new SubmissionFlow({
+    isReady: () => true,
+    load: async () => {
+      assert.fail("load should not run when already ready");
+    },
+    generate: async (prompt, options) => {
+      generated.push({ prompt, options });
+    },
+  });
+
+  await flow.submit("debug prompt", context);
+
+  assert.deepEqual(generated, [{ prompt: "debug prompt", options: context }]);
+});
+
 test("resets the in-flight guard after success", async () => {
   const generated = [];
   const flow = new SubmissionFlow({

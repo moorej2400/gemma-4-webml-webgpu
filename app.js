@@ -2,6 +2,7 @@ import { ModelLifecycle } from "./model-lifecycle.mjs";
 import { ModelSession, UnsupportedModelSessionError } from "./model-session.mjs";
 import { installPageLifecycle } from "./page-lifecycle.mjs";
 import { getLoaderProfile } from "./platform-profile.mjs";
+import { SubmissionFlow } from "./submission-flow.mjs";
 
 // Streamed markdown → HTML via `marked`, loaded lazily. Falls back to a tiny inline renderer until
 // (or if) it loads, so chat never hard-depends on the CDN.
@@ -64,6 +65,16 @@ const modelLifecycle = new ModelLifecycle({
     if (state === "warming") setStatus("loading", "Warming up kernels…");
   },
 });
+const submissionFlow = new SubmissionFlow({
+  isReady: () => Boolean(model),
+  load: loadModel,
+  generate: (prompt, options) => {
+    generationPromise = generateMessage(prompt, options).finally(() => {
+      generationPromise = null;
+    });
+    return generationPromise;
+  },
+});
 installPageLifecycle({
   dispose() {
     abortController?.abort();
@@ -95,16 +106,20 @@ els.input.addEventListener("keydown", (e) => {
 });
 els.thread.addEventListener("click", (e) => {
   const seed = e.target.closest(".seed");
-  if (!seed || seed.disabled || !model || isGenerating) return;
-  els.input.value = seed.textContent; send();
+  if (!seed || seed.disabled || isLoading || isGenerating) return;
+  els.input.value = seed.textContent;
+  autoGrow();
+  refreshSend();
+  send();
 });
 window.addEventListener("webml-debug-command", handleDebugCommand);
 
 renderWelcome();
+refreshSend();
 
 async function loadModel() {
   if (model || isLoading) return;
-  isLoading = true;
+  setLoading(true);
   els.loadBtn.disabled = true;
   els.loadBtn.textContent = "Loading…";
   els.bar.classList.remove("done");
@@ -120,7 +135,7 @@ async function loadModel() {
       setStatus("error", "Model active in another tab. Unload it there before loading here.");
       els.loadBtn.disabled = false;
       els.loadBtn.textContent = "Try again";
-      isLoading = false;
+      setLoading(false);
       return;
     }
     model = result.model;
@@ -145,7 +160,7 @@ async function loadModel() {
     els.bar.classList.add("done");
     els.loadBtn.disabled = false;
     els.loadBtn.textContent = "Retry load";
-    isLoading = false;
+    setLoading(false);
   }
 }
 
@@ -184,13 +199,16 @@ function formatWeightProgress(event, kind, fraction) {
 }
 
 function enableChat() {
-  isLoading = false;
-  els.input.disabled = false;
-  els.input.placeholder = "Ask anything…";
+  setLoading(false);
   els.newBtn.disabled = false;
-  setSeedsEnabled(true);
-  refreshSend();
   els.input.focus();
+}
+
+function setLoading(on) {
+  isLoading = on;
+  els.input.disabled = on || isGenerating;
+  setSeedsEnabled(!on && !isGenerating);
+  refreshSend();
 }
 
 async function disposeModel() {
@@ -205,8 +223,8 @@ async function disposeModel() {
     messages = [];
     isLoading = false;
     els.input.value = "";
-    els.input.disabled = true;
-    els.input.placeholder = "Load the model to start chatting…";
+    els.input.disabled = false;
+    els.input.placeholder = "Ask anything…";
     els.newBtn.disabled = true;
     els.loadBtn.disabled = false;
     els.loadBtn.textContent = "Load model";
@@ -217,6 +235,8 @@ async function disposeModel() {
     els.bar.classList.remove("done");
     setStatus("", "Model unloaded.");
     renderWelcome();
+    setSeedsEnabled(true);
+    refreshSend();
     console.log("[app] model disposed; ownership released.");
   })().finally(() => {
     disposalPromise = null;
@@ -225,15 +245,12 @@ async function disposeModel() {
 }
 
 function send(options = {}) {
-  if (generationPromise) return generationPromise;
-  generationPromise = generateMessage(options).finally(() => {
-    generationPromise = null;
-  });
-  return generationPromise;
+  const text = els.input.value.trim();
+  if (!text || isGenerating) return;
+  return submissionFlow.submit(text, options);
 }
 
-async function generateMessage({ maxNewTokens = 4096 } = {}) {
-  const text = els.input.value.trim();
+async function generateMessage(text, { maxNewTokens = 4096 } = {}) {
   if (!text || !model || isGenerating) return;
 
   removeWelcome();
@@ -299,7 +316,7 @@ function newSession() {
   messages = [];
   model?.reset();
   renderWelcome();
-  setSeedsEnabled(Boolean(model));
+  setSeedsEnabled(true);
   els.input.focus();
 }
 
@@ -426,20 +443,20 @@ function renderWelcome() {
   w.className = "welcome"; w.id = "welcome";
   w.innerHTML = `
     <h2>What's on your mind?</h2>
-    <p>${model ? "Runs entirely on your device." : "Load the model to begin — it runs entirely on your device."}</p>
+    <p>Gemma runs on your device and gets ready when you send your first message.</p>
     <div class="seeds">
       <button class="seed" type="button">Write a haiku about on-device AI</button>
       <button class="seed" type="button">Explain WebGPU in two sentences</button>
       <button class="seed" type="button">Give me a quick pasta recipe</button>
     </div>`;
   els.thread.appendChild(w);
-  setSeedsEnabled(Boolean(model));
+  setSeedsEnabled(true);
 }
 function removeWelcome() { $("welcome")?.remove(); }
 function setSeedsEnabled(on) { document.querySelectorAll(".seed").forEach((s) => { s.disabled = !on; }); }
 
 // ---- utils ----
-function refreshSend() { els.sendBtn.disabled = isGenerating || !model || els.input.value.trim() === ""; }
+function refreshSend() { els.sendBtn.disabled = isLoading || isGenerating || els.input.value.trim() === ""; }
 function autoGrow() { els.input.style.height = "auto"; els.input.style.height = `${Math.min(els.input.scrollHeight, 160)}px`; }
 function scrollDown() { els.scroll.scrollTop = els.scroll.scrollHeight; }
 function finite(v) { return typeof v === "number" && Number.isFinite(v); }
