@@ -27,6 +27,8 @@ let isGenerating = false;
 let isLoading = false;
 let generationPromise = null;
 let disposalPromise = null;
+// Capability failure is terminal for this page; later UI transitions must not re-enable submission.
+const capabilitiesAvailable = Boolean(navigator.gpu && navigator.locks?.request);
 
 // ---- progress bar easing (coalesce bursty byte events into one write/frame, never dip) ----
 let targetProgress = 0, shownProgress = 0, progressRaf = 0;
@@ -115,10 +117,11 @@ els.thread.addEventListener("click", (e) => {
 window.addEventListener("webml-debug-command", handleDebugCommand);
 
 renderWelcome();
+els.input.disabled = !capabilitiesAvailable;
 refreshSend();
 
 async function loadModel() {
-  if (model || isLoading) return;
+  if (!capabilitiesAvailable || model || isLoading) return;
   setLoading(true);
   els.loadBtn.disabled = true;
   els.loadBtn.textContent = "Loading…";
@@ -206,13 +209,14 @@ function enableChat() {
 
 function setLoading(on) {
   isLoading = on;
-  els.input.disabled = on || isGenerating;
-  setSeedsEnabled(!on && !isGenerating);
+  els.input.disabled = !capabilitiesAvailable || on || isGenerating;
+  setSeedsEnabled(capabilitiesAvailable && !on && !isGenerating);
   refreshSend();
 }
 
 async function disposeModel() {
   if (disposalPromise) return disposalPromise;
+  const hadLoadedConversation = Boolean(model);
   disposalPromise = (async () => {
     els.unloadBtn.disabled = true;
     abortController?.abort();
@@ -222,11 +226,12 @@ async function disposeModel() {
     model = null;
     messages = [];
     isLoading = false;
-    els.input.value = "";
-    els.input.disabled = false;
+    // A canceled first load has no conversation yet, so its prompt remains available for retry.
+    if (hadLoadedConversation) els.input.value = "";
+    els.input.disabled = !capabilitiesAvailable;
     els.input.placeholder = "Ask anything…";
     els.newBtn.disabled = true;
-    els.loadBtn.disabled = false;
+    els.loadBtn.disabled = !capabilitiesAvailable;
     els.loadBtn.textContent = "Load model";
     els.loadBtn.classList.remove("hidden");
     els.unloadBtn.classList.add("hidden");
@@ -235,7 +240,7 @@ async function disposeModel() {
     els.bar.classList.remove("done");
     setStatus("", "Model unloaded.");
     renderWelcome();
-    setSeedsEnabled(true);
+    setSeedsEnabled(capabilitiesAvailable);
     refreshSend();
     console.log("[app] model disposed; ownership released.");
   })().finally(() => {
@@ -295,7 +300,7 @@ async function generateMessage(text, { maxNewTokens = 4096 } = {}) {
 
 function setGenerating(on) {
   isGenerating = on;
-  els.input.disabled = on;
+  els.input.disabled = !capabilitiesAvailable || on;
   els.newBtn.disabled = on;
   els.unloadBtn.disabled = on;
   els.sendBtn.classList.toggle("hidden", on);
@@ -316,7 +321,7 @@ function newSession() {
   messages = [];
   model?.reset();
   renderWelcome();
-  setSeedsEnabled(true);
+  setSeedsEnabled(capabilitiesAvailable);
   els.input.focus();
 }
 
@@ -450,13 +455,13 @@ function renderWelcome() {
       <button class="seed" type="button">Give me a quick pasta recipe</button>
     </div>`;
   els.thread.appendChild(w);
-  setSeedsEnabled(true);
+  setSeedsEnabled(capabilitiesAvailable);
 }
 function removeWelcome() { $("welcome")?.remove(); }
 function setSeedsEnabled(on) { document.querySelectorAll(".seed").forEach((s) => { s.disabled = !on; }); }
 
 // ---- utils ----
-function refreshSend() { els.sendBtn.disabled = isLoading || isGenerating || els.input.value.trim() === ""; }
+function refreshSend() { els.sendBtn.disabled = !capabilitiesAvailable || isLoading || isGenerating || els.input.value.trim() === ""; }
 function autoGrow() { els.input.style.height = "auto"; els.input.style.height = `${Math.min(els.input.scrollHeight, 160)}px`; }
 function scrollDown() { els.scroll.scrollTop = els.scroll.scrollHeight; }
 function finite(v) { return typeof v === "number" && Number.isFinite(v); }

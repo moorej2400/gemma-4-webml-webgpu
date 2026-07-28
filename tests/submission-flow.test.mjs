@@ -92,6 +92,33 @@ test("carries the original submission context through to generation", async () =
   assert.deepEqual(generated, [{ prompt: "debug prompt", options: context }]);
 });
 
+test("snapshots submission context before an awaited load", async () => {
+  let ready = false;
+  const loading = Promise.withResolvers();
+  const generated = [];
+  const context = { maxNewTokens: 96 };
+  const flow = new SubmissionFlow({
+    isReady: () => ready,
+    load: async () => {
+      await loading.promise;
+      ready = true;
+    },
+    generate: async (prompt, options) => {
+      generated.push({ prompt, options });
+    },
+  });
+
+  const submission = flow.submit("stable options", context);
+  context.maxNewTokens = 4;
+  loading.resolve();
+  await submission;
+
+  assert.deepEqual(generated, [{
+    prompt: "stable options",
+    options: { maxNewTokens: 96 },
+  }]);
+});
+
 test("resets the in-flight guard after success", async () => {
   const generated = [];
   const flow = new SubmissionFlow({

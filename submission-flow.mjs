@@ -13,7 +13,11 @@ export class SubmissionFlow {
   submit(prompt, context) {
     // Repeated UI events must join the first prompt and its generation context.
     if (this.#inFlight) return this.#inFlight;
-    this.#inFlight = this.#run(prompt, context).finally(() => {
+    // Snapshot before loading so caller mutation cannot change the eventual generation.
+    const retainedContext = context && typeof context === "object"
+      ? { ...context }
+      : context;
+    this.#inFlight = this.#run(prompt, retainedContext).finally(() => {
       this.#inFlight = null;
     });
     return this.#inFlight;

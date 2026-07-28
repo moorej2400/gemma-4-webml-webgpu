@@ -43,7 +43,7 @@ test("composer and seed prompts are available before model loading", async () =>
   ]);
 
   assert.match(html, /<textarea id="input" rows="1" placeholder="Ask anything…"><\/textarea>/);
-  assert.match(app, /setSeedsEnabled\(true\)/);
+  assert.match(app, /setSeedsEnabled\(capabilitiesAvailable\)/);
   assert.match(
     app,
     /if \(!seed \|\| seed\.disabled \|\| isLoading \|\| isGenerating\) return;/,
@@ -68,9 +68,10 @@ test("send delegates the retained prompt and generation options through Submissi
 test("loading preserves the prompt and controls are retryable when loading stops", async () => {
   const source = await readFile(new URL("app.js", root), "utf8");
 
+  assert.match(source, /const capabilitiesAvailable = Boolean\(navigator\.gpu && navigator\.locks\?\.request\)/);
   assert.match(source, /function setLoading\(on\)/);
-  assert.match(source, /els\.input\.disabled = on \|\| isGenerating/);
-  assert.match(source, /function refreshSend\(\) \{\s*els\.sendBtn\.disabled = isLoading \|\| isGenerating \|\| els\.input\.value\.trim\(\) === "";/);
+  assert.match(source, /els\.input\.disabled = !capabilitiesAvailable \|\| on \|\| isGenerating/);
+  assert.match(source, /function refreshSend\(\) \{\s*els\.sendBtn\.disabled = !capabilitiesAvailable \|\| isLoading \|\| isGenerating \|\| els\.input\.value\.trim\(\) === "";/);
   assert.match(source, /setLoading\(true\);/);
   assert.match(source, /setLoading\(false\);/);
   assert.match(source, /async function generateMessage\(text,[\s\S]*?els\.input\.value = "";/);
@@ -84,9 +85,9 @@ test("manual unload leaves chat ready for another first-send load", async () => 
     source.indexOf("function send("),
   );
 
-  assert.match(disposeModel, /els\.input\.disabled = false/);
+  assert.match(disposeModel, /els\.input\.disabled = !capabilitiesAvailable/);
   assert.match(disposeModel, /els\.input\.placeholder = "Ask anything…"/);
-  assert.match(disposeModel, /setSeedsEnabled\(true\)/);
+  assert.match(disposeModel, /setSeedsEnabled\(capabilitiesAvailable\)/);
 });
 
 test("welcome copy explains first-message on-device loading without implementation jargon", async () => {
