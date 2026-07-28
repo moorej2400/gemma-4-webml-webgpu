@@ -56,8 +56,11 @@ test("real browser Settings controls manual model control visibility", async (t)
   t.after(() => browser.close());
   const origin = `http://127.0.0.1:${server.address().port}`;
 
-  async function openApp({ showManualControls = null } = {}) {
-    const context = await browser.newContext();
+  async function openApp({
+    showManualControls = null,
+    viewport = { width: 1280, height: 720 },
+  } = {}) {
+    const context = await browser.newContext({ viewport });
     await context.addInitScript((preference) => {
       Object.defineProperty(navigator, "gpu", { value: {}, configurable: true });
       window.__mockRuntimeState = {
@@ -149,10 +152,12 @@ test("real browser Settings controls manual model control visibility", async (t)
     try {
       const settingsButton = page.locator("#settingsBtn");
       const popover = page.locator("#settingsPopover");
+      const toggle = page.locator("#manualControlsToggle");
 
       await settingsButton.click();
       assert.equal(await settingsButton.getAttribute("aria-expanded"), "true");
       assert.equal(await popover.isVisible(), true);
+      assert.equal(await toggle.evaluate((element) => element === document.activeElement), true);
 
       await page.locator("#settingsRow").click();
       assert.equal(await popover.isVisible(), true);
@@ -160,6 +165,10 @@ test("real browser Settings controls manual model control visibility", async (t)
       await page.keyboard.press("Escape");
       assert.equal(await settingsButton.getAttribute("aria-expanded"), "false");
       assert.equal(await popover.isVisible(), false);
+      assert.equal(
+        await settingsButton.evaluate((element) => element === document.activeElement),
+        true,
+      );
 
       await settingsButton.click();
       await page.locator("#thread").click({ position: { x: 4, y: 4 } });
@@ -167,6 +176,63 @@ test("real browser Settings controls manual model control visibility", async (t)
       assert.equal(await popover.isVisible(), false);
     } finally {
       await context.close();
+    }
+  });
+
+  await t.test("keeps manual header controls on one row at phone widths", async () => {
+    for (const viewport of [
+      { width: 375, height: 667 },
+      { width: 440, height: 796 },
+    ]) {
+      const { context, page } = await openApp({
+        showManualControls: true,
+        viewport,
+      });
+      try {
+        const layout = await page.evaluate(() => {
+          const rect = (selector) => {
+            const box = document.querySelector(selector).getBoundingClientRect();
+            return {
+              left: box.left,
+              right: box.right,
+              top: box.top,
+              bottom: box.bottom,
+              width: box.width,
+              height: box.height,
+            };
+          };
+          const header = rect("header");
+          const brand = rect(".brand");
+          const newSession = rect("#newBtn");
+          const load = rect("#loadBtn");
+          const settings = rect("#settingsBtn");
+          return {
+            documentWidth: document.documentElement.scrollWidth,
+            header,
+            brand,
+            newSession,
+            load,
+            settings,
+            loadWhiteSpace: getComputedStyle(document.querySelector("#loadBtn")).whiteSpace,
+          };
+        });
+
+        assert.equal(layout.documentWidth, viewport.width);
+        assert.ok(layout.header.height <= 65, JSON.stringify(layout));
+        assert.equal(layout.newSession.height, 44);
+        if (viewport.width <= 400) assert.equal(layout.newSession.width, 44);
+        assert.equal(layout.loadWhiteSpace, "nowrap");
+        assert.equal(layout.newSession.top, layout.load.top);
+        assert.equal(layout.load.top, layout.settings.top);
+        assert.ok(layout.brand.right <= layout.newSession.left);
+        assert.ok(layout.newSession.right <= layout.load.left);
+        assert.ok(layout.load.right <= layout.settings.left);
+        assert.ok(layout.settings.right <= viewport.width);
+        assert.equal(await page.locator("#newBtn").getAttribute("title"), "New session");
+        assert.equal(await page.locator("#newBtn").getAttribute("aria-label"), "New session");
+      } finally {
+        await context.close();
+      }
     }
   });
 });

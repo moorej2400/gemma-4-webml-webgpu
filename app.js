@@ -104,7 +104,10 @@ setManualControlsVisible(readManualControlsPreference());
 els.loadBtn.addEventListener("click", loadModel);
 els.unloadBtn.addEventListener("click", disposeModel);
 els.newBtn.addEventListener("click", newSession);
-els.settingsBtn.addEventListener("click", () => setSettingsOpen(els.settingsPopover.hidden));
+els.settingsBtn.addEventListener("click", () => {
+  const opening = els.settingsPopover.hidden;
+  setSettingsOpen(opening, { restoreFocus: !opening });
+});
 els.manualControlsToggle.addEventListener("change", () => {
   const showManualControls = els.manualControlsToggle.checked;
   setManualControlsVisible(showManualControls);
@@ -127,13 +130,13 @@ els.thread.addEventListener("click", (e) => {
 window.addEventListener("webml-debug-command", handleDebugCommand);
 document.addEventListener("pointerdown", (event) => {
   if (!els.settingsPopover.hidden && !event.target.closest(".settings-surface")) {
+    // Outside interaction owns the next focus target; only keyboard/trigger closes restore focus.
     setSettingsOpen(false);
   }
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !els.settingsPopover.hidden) {
-    setSettingsOpen(false);
-    els.settingsBtn.focus();
+    setSettingsOpen(false, { restoreFocus: true });
   }
 });
 
@@ -147,9 +150,11 @@ function setManualControlsVisible(show) {
   els.manualModelControls.classList.toggle("hidden", !show);
 }
 
-function setSettingsOpen(open) {
+function setSettingsOpen(open, { restoreFocus = false } = {}) {
   els.settingsPopover.hidden = !open;
   els.settingsBtn.setAttribute("aria-expanded", String(open));
+  if (open) els.manualControlsToggle.focus();
+  else if (restoreFocus) els.settingsBtn.focus();
 }
 
 async function loadModel() {
