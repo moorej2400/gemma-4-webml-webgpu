@@ -2,8 +2,9 @@
   "name": "gemma-4-webml-webgpu",
   "private": true,
   "scripts": {
-    "prepare-runtime": "node scripts/prepare-runtime.mjs",
-    "test": "node --test tests/app-contract.test.mjs tests/browser-runtime-loader.test.mjs tests/clean-checkout.test.mjs tests/debug-surface.test.mjs tests/disk-backed-embedding.test.mjs tests/manual-controls-preference.test.mjs tests/model-lifecycle.test.mjs tests/model-session.test.mjs tests/page-lifecycle.test.mjs tests/platform-profile.test.mjs tests/runtime-cleanup.test.mjs tests/runtime-disk-integration.test.mjs tests/runtime-patch.test.mjs tests/runtime-preparation.test.mjs tests/submission-flow.test.mjs tests/weight-range-plan.test.mjs"
+    "build:pages": "node scripts/build-pages.mjs",
+    "prepare-runtime": "node scripts/prepare-runtime.mjs --source-output gemma-4-e2b.js",
+    "test": "node --test tests/app-contract.test.mjs tests/browser-runtime-loader.test.mjs tests/clean-checkout.test.mjs tests/debug-surface.test.mjs tests/disk-backed-embedding.test.mjs tests/manual-controls-preference.test.mjs tests/model-lifecycle.test.mjs tests/model-session.test.mjs tests/page-lifecycle.test.mjs tests/pages-build.test.mjs tests/platform-profile.test.mjs tests/runtime-cleanup.test.mjs tests/runtime-disk-integration.test.mjs tests/runtime-patch.test.mjs tests/runtime-preparation.test.mjs tests/submission-flow.test.mjs tests/weight-range-plan.test.mjs"
   },
   "devDependencies": {
     "es-module-lexer": "2.3.1",

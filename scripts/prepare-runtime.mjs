@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -41,11 +41,30 @@ async function readSource(sourcePath, sourceUrl) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+async function requireAbsent(outputPath) {
+  try {
+    await stat(outputPath);
+    throw new Error(`Runtime output already exists: ${outputPath}`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const manifest = JSON.parse(
     await readFile(path.join(root, "runtime-manifest.json"), "utf8"),
   );
+  const outputPath = path.resolve(options.output ?? path.join(root, manifest.output));
+  const sourceOutputPath = options["source-output"]
+    ? path.resolve(options["source-output"])
+    : null;
+  if (sourceOutputPath === outputPath) {
+    throw new Error("Runtime source and patched output paths must differ");
+  }
+  await requireAbsent(outputPath);
+  if (sourceOutputPath) await requireAbsent(sourceOutputPath);
+
   const source = await readSource(options.source, manifest.sourceUrl);
   const sourceDigest = sha256(source);
   if (sourceDigest !== manifest.sourceSha256) {
@@ -69,9 +88,12 @@ async function main() {
     );
   }
 
-  const outputPath = path.resolve(options.output ?? path.join(root, manifest.output));
   await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, patched);
+  if (sourceOutputPath) {
+    await mkdir(path.dirname(sourceOutputPath), { recursive: true });
+    await writeFile(sourceOutputPath, source, { flag: "wx" });
+  }
+  await writeFile(outputPath, patched, { flag: "wx" });
   process.stdout.write(`Prepared ${outputPath}\nsha256 ${patchedDigest}\n`);
 }
 

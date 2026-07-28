@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -12,6 +12,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 test("prepares a hash-verified importable runtime from the upstream artifact", async () => {
   const temp = await mkdtemp(path.join(tmpdir(), "gemma-runtime-"));
   const output = path.join(temp, "gemma-4-e2b.pretty.js");
+  const sourceOutput = path.join(temp, "gemma-4-e2b.js");
   await cp(path.join(root, "weight-range-plan.mjs"), path.join(temp, "weight-range-plan.mjs"));
   await cp(
     path.join(root, "disk-backed-embedding.mjs"),
@@ -21,9 +22,14 @@ test("prepares a hash-verified importable runtime from the upstream artifact", a
   const result = spawnSync(process.execPath, [
     path.join(root, "scripts/prepare-runtime.mjs"),
     "--source", path.join(root, "gemma-4-e2b.js"),
+    "--source-output", sourceOutput,
     "--output", output,
   ], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(
+    await readFile(sourceOutput),
+    await readFile(path.join(root, "gemma-4-e2b.js")),
+  );
 
   const manifest = JSON.parse(await readFile(path.join(root, "runtime-manifest.json"), "utf8"));
   assert.equal(
@@ -36,4 +42,20 @@ test("prepares a hash-verified importable runtime from the upstream artifact", a
   const runtime = await import(pathToFileURL(output));
   assert.equal(typeof runtime.Gemma4Mobile.load, "function");
   assert.equal(typeof runtime.withOwnedRuntime, "function");
+});
+
+test("refuses to overwrite an existing runtime output", async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), "gemma-runtime-existing-"));
+  const output = path.join(temp, "gemma-4-e2b.pretty.js");
+  await writeFile(output, "preserve me");
+
+  const result = spawnSync(process.execPath, [
+    path.join(root, "scripts/prepare-runtime.mjs"),
+    "--source", path.join(root, "gemma-4-e2b.js"),
+    "--output", output,
+  ], { encoding: "utf8" });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /output.*already exists/i);
+  assert.equal(await readFile(output, "utf8"), "preserve me");
 });

@@ -2,11 +2,19 @@
 
 On-device AI chat that runs directly in a supported web browser.
 
+[**Open the live app**](https://moorej2400.github.io/gemma-4-webml-webgpu/)
+
 This project pairs Gemma 4 with custom WebGPU kernels, a focused chat interface, and a practical way to test the experience on a real iPhone. Conversations stay in the browser; the model files are downloaded from Hugging Face when you load the model.
 
 > **Project status:** Verified on a physical iPhone with local generation at
 > 20.7 tokens/second. Browser support, free device storage, and available memory
 > still determine whether the model can load successfully.
+
+## Public Requirements
+
+The live app requires a browser with WebGPU and Web Locks, sufficient available
+memory, and enough storage or cache capacity for the model. The first model load
+downloads ~2.4 GB from Hugging Face; later loads may use the browser cache.
 
 ## What It Does
 
@@ -14,7 +22,7 @@ This project pairs Gemma 4 with custom WebGPU kernels, a focused chat interface,
 - Streams responses into a mobile-friendly chat interface
 - Shows model-loading and generation performance
 - Supports secure testing over your local network
-- Sends iPhone Safari diagnostics back to the development server
+- Sends diagnostics to the development server only from approved local hosts
 
 ## Try It Locally
 
@@ -49,4 +57,11 @@ iPhone testing requires local HTTPS and trusting a development certificate gener
 
 ## Privacy
 
-Chat prompts and generated replies are processed in the browser. The development server records browser diagnostics in a local `debug.log` file to support physical-device debugging. That log and all generated certificates are excluded from Git.
+Chat prompts and generated replies are processed in the browser. The public site
+does not collect prompts, generated text, or application telemetry. Its debug
+client exits before installing diagnostics.
+
+On `localhost`, `127.0.0.1`, `::1`, and private LAN IPv4 addresses, the debug
+client sends console, error, network, device, and lifecycle diagnostics to the
+local development server. The server records them in a local `debug.log`; that
+file and all generated certificates are excluded from Git.

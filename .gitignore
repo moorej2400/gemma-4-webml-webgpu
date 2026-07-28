@@ -12,3 +12,4 @@ node_modules/
 gemma-4-e2b.js
 *.bak.js
 *.pretty.js
+_site/

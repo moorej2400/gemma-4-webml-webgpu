@@ -9,6 +9,30 @@
 (function () {
   "use strict";
 
+  function isPrivateIpv4(hostname) {
+    var parts = hostname.split(".");
+    if (parts.length !== 4) return false;
+    for (var i = 0; i < parts.length; i++) {
+      if (!/^(0|[1-9]\d{0,2})$/.test(parts[i]) || Number(parts[i]) > 255) return false;
+    }
+    var first = Number(parts[0]);
+    var second = Number(parts[1]);
+    return first === 10
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168);
+  }
+
+  var debugHostname = location.hostname.toLowerCase();
+  // Public origins must return before any diagnostic wrapper or listener can observe app data.
+  if (
+    debugHostname !== "localhost"
+    && debugHostname !== "127.0.0.1"
+    && debugHostname !== "::1"
+    && debugHostname !== "[::1]"
+    && !isPrivateIpv4(debugHostname)
+  ) return;
+  window.__WEBML_LOCAL_DEBUG__ = true;
+
   var WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/__debug";
   var buffer = [];          // queued events before the socket is open
   var MAX_BUFFER = 500;

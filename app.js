@@ -128,7 +128,9 @@ els.thread.addEventListener("click", (e) => {
   refreshSend();
   send();
 });
-window.addEventListener("webml-debug-command", handleDebugCommand);
+if (window.__WEBML_LOCAL_DEBUG__) {
+  window.addEventListener("webml-debug-command", handleDebugCommand);
+}
 document.addEventListener("pointerdown", (event) => {
   if (!els.settingsPopover.hidden && !event.target.closest(".settings-surface")) {
     // Outside interaction owns the next focus target; only keyboard/trigger closes restore focus.

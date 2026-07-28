@@ -123,3 +123,12 @@ test("runtime disposal awaits owned GPU runtime destruction", async () => {
   assert.match(source, /async dispose\(\)/);
   assert.match(source, /this\.#r && await this\.#e\.destroy\(\)/);
 });
+
+test("app installs debug commands only when the local debug client is active", async () => {
+  const source = await readFile(new URL("app.js", root), "utf8");
+
+  assert.match(
+    source,
+    /if \(window\.__WEBML_LOCAL_DEBUG__\) \{\s*window\.addEventListener\("webml-debug-command", handleDebugCommand\);\s*\}/,
+  );
+});
