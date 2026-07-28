@@ -77,6 +77,11 @@ test("real browser Settings controls manual model control visibility", async (t)
       contentType: "text/javascript",
       body: mockRuntime,
     }));
+    await context.route("**/browser-runtime-loader.mjs", (route) => route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: 'export const loadBrowserRuntime = () => import("./gemma-4-e2b.pretty.js");',
+    }));
     await context.route("https://esm.sh/**", (route) => route.abort());
     const page = await context.newPage();
     await page.goto(origin);

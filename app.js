@@ -1,3 +1,4 @@
+import { loadBrowserRuntime } from "./browser-runtime-loader.mjs";
 import { ModelLifecycle } from "./model-lifecycle.mjs";
 import { ModelSession, UnsupportedModelSessionError } from "./model-session.mjs";
 import { readManualControlsPreference, writeManualControlsPreference } from "./manual-controls-preference.mjs";
@@ -65,7 +66,7 @@ const modelSession = new ModelSession();
 const modelLifecycle = new ModelLifecycle({
   session: modelSession,
   loaderProfile: getLoaderProfile(),
-  importRuntime: () => import("./gemma-4-e2b.pretty.js"),
+  importRuntime: loadBrowserRuntime,
   onStateChange(state) {
     if (state === "warming") setStatus("loading", "Warming up kernels…");
   },

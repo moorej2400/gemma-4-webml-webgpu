@@ -1,5 +1,5 @@
 {
-  "sourceUrl": "https://huggingface.co/spaces/webml-community/gemma-4-webgpu-kernels/resolve/main/gemma-4-e2b.js",
+  "sourceUrl": "https://webml-community-gemma-4-webgpu-kernels.static.hf.space/gemma-4-e2b.js",
   "sourceSha256": "0234c0e866bfaa9623e938a7cfa7f5740cca22532cc1112dd4e8915b97f78d62",
   "patch": "patches/gemma-ios-memory.patch",
   "output": "gemma-4-e2b.pretty.js",

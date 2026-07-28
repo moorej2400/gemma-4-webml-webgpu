@@ -19,3 +19,17 @@ test("third-party runtime artifacts are not tracked", async () => {
   assert.match(ignore, /^gemma-4-e2b\.js$/m);
   assert.match(ignore, /^\*\.pretty\.js$/m);
 });
+
+test("only the licensed browser formatter is tracked under vendor", async () => {
+  const beautifier = await readFile(new URL("../vendor/beautifier.min.js", import.meta.url));
+  const installed = await readFile(
+    new URL("../node_modules/js-beautify/js/lib/beautifier.min.js", import.meta.url),
+  );
+  const license = await readFile(new URL("../vendor/LICENSE.js-beautify", import.meta.url));
+  const installedLicense = await readFile(
+    new URL("../node_modules/js-beautify/LICENSE", import.meta.url),
+  );
+
+  assert.deepEqual(beautifier, installed);
+  assert.deepEqual(license, installedLicense);
+});

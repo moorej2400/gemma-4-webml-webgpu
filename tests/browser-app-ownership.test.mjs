@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -6,11 +7,17 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { normalizeTrailingNewline } from "../runtime-patch.mjs";
+
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
+const { js: beautify } = require("js-beautify");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const mockRuntime = `
+  import "./weight-range-plan.mjs";
+  import "./disk-backed-embedding.mjs";
+
   export class Gemma4Mobile {
     static async load() {
       await fetch("/__mock_weight");
@@ -26,6 +33,14 @@ const mockRuntime = `
 
 test("two real app pages import and load the runtime only in the lock owner", async (t) => {
   let weightRequests = 0;
+  let manifestRequests = 0;
+  let sourceRequests = 0;
+  let patchRequests = 0;
+  let formatterRequests = 0;
+  const sourceSha256 = createHash("sha256").update(mockRuntime).digest("hex");
+  const patchedSha256 = createHash("sha256")
+    .update(normalizeTrailingNewline(beautify(mockRuntime, { indent_size: 2 })))
+    .digest("hex");
   const server = createServer(async (request, response) => {
     const pathname = new URL(request.url, "http://localhost").pathname;
     if (pathname === "/__mock_weight") {
@@ -33,6 +48,33 @@ test("two real app pages import and load the runtime only in the lock owner", as
       response.writeHead(200, { "Content-Type": "application/octet-stream" });
       response.end("weight");
       return;
+    }
+    if (pathname === "/runtime-manifest.json") {
+      manifestRequests += 1;
+      const sourceUrl = `http://127.0.0.1:${server.address().port}/__mock_runtime.js`;
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        sourceUrl,
+        sourceSha256,
+        patch: "__mock_runtime.patch",
+        patchedSha256,
+      }));
+      return;
+    }
+    if (pathname === "/__mock_runtime.js") {
+      sourceRequests += 1;
+      response.writeHead(200, { "Content-Type": "text/javascript" });
+      response.end(mockRuntime);
+      return;
+    }
+    if (pathname === "/__mock_runtime.patch") {
+      patchRequests += 1;
+      response.writeHead(200, { "Content-Type": "text/plain" });
+      response.end("");
+      return;
+    }
+    if (pathname === "/vendor/beautifier.min.js") {
+      formatterRequests += 1;
     }
 
     const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
@@ -62,11 +104,6 @@ test("two real app pages import and load the runtime only in the lock owner", as
     localStorage.setItem("gemma.showManualModelControls", "true");
   });
 
-  let runtimeImports = 0;
-  await context.route("**/gemma-4-e2b.pretty.js", async (route) => {
-    runtimeImports += 1;
-    await route.fulfill({ status: 200, contentType: "text/javascript", body: mockRuntime });
-  });
   await context.route("https://esm.sh/**", (route) => route.abort());
 
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -77,6 +114,11 @@ test("two real app pages import and load the runtime only in the lock owner", as
     first.locator("#loadBtn").waitFor(),
     second.locator("#loadBtn").waitFor(),
   ]);
+  assert.deepEqual(
+    [manifestRequests, sourceRequests, patchRequests, formatterRequests],
+    [0, 0, 0, 0],
+    "app boot must not start browser runtime preparation",
+  );
 
   await Promise.all([
     first.locator("#loadBtn").click(),
@@ -93,7 +135,10 @@ test("two real app pages import and load the runtime only in the lock owner", as
   ]);
   assert.equal(statuses.filter((status) => status.includes("Ready")).length, 1);
   assert.equal(statuses.filter((status) => status.includes("another tab")).length, 1);
-  assert.equal(runtimeImports, 1);
+  assert.deepEqual(
+    [manifestRequests, sourceRequests, patchRequests, formatterRequests],
+    [1, 1, 1, 1],
+  );
   assert.equal(weightRequests, 1);
 
   const owner = statuses[0].includes("Ready") ? first : second;

@@ -26,6 +26,12 @@ and neither the upstream nor prepared runtime is committed to this repository.
 Consult the upstream project before redistributing or incorporating it
 elsewhere.
 
+## js-beautify
+
+The browser loader includes the minified JavaScript formatter from
+`js-beautify` 2.0.3. It is distributed under the MIT License; see
+`vendor/LICENSE.js-beautify`.
+
 ## Gemma Model
 
 The app downloads `google/gemma-4-E2B-it-qat-mobile-transformers` from Hugging Face at runtime. Model files are not included in this repository. The model page identifies its license as Apache 2.0; review the [model card](https://huggingface.co/google/gemma-4-E2B-it-qat-mobile-transformers) for current terms and usage guidance.

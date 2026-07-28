@@ -20,22 +20,21 @@ This project pairs Gemma 4 with custom WebGPU kernels, a focused chat interface,
 
 You need a current version of Node.js and a browser with WebGPU support.
 
-Install the small build dependency, then download and prepare the browser
-runtime from its original source:
+Install dependencies and start the local server:
 
 ```sh
 npm install
-npm run prepare-runtime
 node server.js
 ```
 
-Then open `http://localhost:8080` on the same computer and select **Load model**.
+Then open `http://localhost:8080` on the same computer and send a message.
 
-The first load downloads the model from Hugging Face and can take some time. Later loads may use the browser cache.
+The first message verifies and patches the runtime in the browser, then
+downloads the model from Hugging Face. Later loads may use the browser cache.
 
-The app does not load the model automatically. Select **Load model** when you
-are ready. Only one tab can own the model at a time, which prevents two Safari
-pages from exhausting an iPhone's memory.
+The app does not load the runtime or model at page boot. Only one tab can own
+the model at a time, which prevents two Safari pages from exhausting an
+iPhone's memory.
 
 ## Test On iPhone
 

@@ -10,7 +10,9 @@ test("app defers runtime import until the lifecycle owns the lock", async () => 
   assert.match(source, /import \{ ModelSession/);
   assert.match(source, /import \{ ModelLifecycle/);
   assert.match(source, /import \{ getLoaderProfile/);
-  assert.match(source, /importRuntime:\s*\(\)\s*=>\s*import\("\.\/gemma-4-e2b\.pretty\.js"\)/);
+  assert.match(source, /import \{ loadBrowserRuntime \} from "\.\/browser-runtime-loader\.mjs";/);
+  assert.match(source, /importRuntime:\s*loadBrowserRuntime/);
+  assert.doesNotMatch(source, /import\("\.\/gemma-4-e2b\.pretty\.js"\)/);
   assert.doesNotMatch(source, /^import .*Gemma4Mobile/m);
   assert.doesNotMatch(source, /auto-loading model|setTimeout\(loadModel/);
   assert.doesNotMatch(source, /window\.__model/);

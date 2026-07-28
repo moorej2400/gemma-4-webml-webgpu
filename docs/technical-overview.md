@@ -3,8 +3,10 @@
 ## Components
 
 - `index.html` and `app.js` provide the chat interface, model-loading flow, streamed output, and generation statistics.
-- `scripts/prepare-runtime.mjs` verifies and patches the upstream Gemma 4
-  WebGPU runtime locally.
+- `browser-runtime-loader.mjs` verifies, formats, patches, and imports the
+  upstream Gemma 4 WebGPU runtime after model ownership is acquired.
+- `runtime-patch.mjs` applies the same checked-in patch in browsers and the
+  optional Node preparation script.
 - `disk-backed-embedding.mjs` keeps the oversized per-layer embedding out of
   resident GPU memory on iPhone.
 - `server.js` provides a dependency-free HTTP/HTTPS development server and WebSocket debugging channel.
@@ -12,7 +14,13 @@
 
 ## Model Loading
 
-The runtime downloads model weights, tokenizer data, and configuration from `google/gemma-4-E2B-it-qat-mobile-transformers` on Hugging Face. Large responses may be cached by the browser. No model weights are stored in this repository.
+The browser verifies the exact upstream runtime bytes and exact patched output
+before importing a temporary Blob module. Runtime preparation starts only
+after the page owns the model Web Lock. The runtime then downloads model
+weights, tokenizer data, and configuration from
+`google/gemma-4-E2B-it-qat-mobile-transformers` on Hugging Face. Large
+responses may be cached by the browser. No model weights are stored in this
+repository.
 
 On iPhone, the loader uses one 32 MiB download lane. The model contains a
 1.1 GiB per-layer embedding that exceeds Safari's practical resident-memory

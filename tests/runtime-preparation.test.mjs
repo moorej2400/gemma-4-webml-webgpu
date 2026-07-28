@@ -26,6 +26,10 @@ test("prepares a hash-verified importable runtime from the upstream artifact", a
   assert.equal(result.status, 0, result.stderr || result.stdout);
 
   const manifest = JSON.parse(await readFile(path.join(root, "runtime-manifest.json"), "utf8"));
+  assert.equal(
+    manifest.sourceUrl,
+    "https://webml-community-gemma-4-webgpu-kernels.static.hf.space/gemma-4-e2b.js",
+  );
   const bytes = await readFile(output);
   assert.equal(createHash("sha256").update(bytes).digest("hex"), manifest.patchedSha256);
 
