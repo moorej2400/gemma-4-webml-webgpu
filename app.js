@@ -185,15 +185,15 @@ async function loadModel() {
 
     const seconds = ((performance.now() - started) / 1000).toFixed(1);
     console.log(`[app] model ready in ${seconds}s`);
-    setStatus("ready", `Ready in <strong>${seconds}s</strong> · on-device`);
     setProgressImmediate(1);
     els.bar.classList.add("done");
     els.loadBtn.classList.add("hidden");
     els.unloadBtn.classList.remove("hidden");
     reportDebugEvent("gpu", model.deviceInfo());
     enableChat();
-    // Collapse the status bar shortly after ready so the thread gets the space.
-    setTimeout(() => { if (!isGenerating && model) els.statusbar.classList.remove("show"); }, 2500);
+    // The bar reports model loading and actionable failures; chat output carries
+    // generation state after the model is ready.
+    els.statusbar.classList.remove("show");
   } catch (error) {
     console.error("[app] load failed:", error?.stack || error?.message || error);
     const message = error instanceof UnsupportedModelSessionError
@@ -345,8 +345,6 @@ function setGenerating(on) {
   els.unloadBtn.disabled = on;
   els.sendBtn.classList.toggle("hidden", on);
   els.stopBtn.classList.toggle("hidden", !on);
-  if (on) setStatus("busy", "Generating…");
-  else if (model) setStatus("ready", "Ready · on-device");
   refreshSend();
 }
 

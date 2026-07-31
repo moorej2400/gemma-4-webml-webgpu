@@ -132,15 +132,25 @@ test("two real app pages import and load the runtime only in the lock owner", as
     second.locator("#loadBtn").click(),
   ]);
   await Promise.all([
-    first.waitForFunction(() => /Ready|another tab/.test(document.querySelector("#statusText").textContent)),
-    second.waitForFunction(() => /Ready|another tab/.test(document.querySelector("#statusText").textContent)),
+    first.waitForFunction(() => (
+      document.querySelector("#unloadBtn").offsetParent !== null
+      || document.querySelector("#statusText").textContent.includes("another tab")
+    )),
+    second.waitForFunction(() => (
+      document.querySelector("#unloadBtn").offsetParent !== null
+      || document.querySelector("#statusText").textContent.includes("another tab")
+    )),
   ]);
 
   const statuses = await Promise.all([
     first.locator("#statusText").textContent(),
     second.locator("#statusText").textContent(),
   ]);
-  assert.equal(statuses.filter((status) => status.includes("Ready")).length, 1);
+  const ownerFlags = await Promise.all([
+    first.locator("#unloadBtn").isVisible(),
+    second.locator("#unloadBtn").isVisible(),
+  ]);
+  assert.equal(ownerFlags.filter(Boolean).length, 1);
   assert.equal(statuses.filter((status) => status.includes("another tab")).length, 1);
   assert.deepEqual(
     [
@@ -154,8 +164,11 @@ test("two real app pages import and load the runtime only in the lock owner", as
   );
   assert.equal(weightRequests, 1);
 
-  const owner = statuses[0].includes("Ready") ? first : second;
+  const owner = ownerFlags[0] ? first : second;
   const blocked = owner === first ? second : first;
+  assert.equal(await owner.locator("#statusbar").evaluate((element) => (
+    element.classList.contains("show")
+  )), false);
   assert.equal(await blocked.locator("#unloadBtn").isVisible(), false);
   await owner.locator("#unloadBtn").click();
 });

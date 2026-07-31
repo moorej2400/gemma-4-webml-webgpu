@@ -150,6 +150,10 @@ test("real browser enforces chat-first submission state", async (t) => {
       assert.equal(state.generateCalls, 1);
       assert.deepEqual(state.prompts, ["retained first prompt"]);
       assert.equal(await page.locator("#input").inputValue(), "");
+      assert.equal(await page.locator("#statusbar").evaluate((element) => (
+        element.classList.contains("show")
+      )), false);
+      assert.doesNotMatch(await page.locator("#statusText").textContent(), /Ready/);
     } finally {
       await context.close();
     }
